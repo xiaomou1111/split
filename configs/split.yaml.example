@@ -1,0 +1,74 @@
+# ============================================================================
+# split.yaml — eBPF-Split 框架配置（语法：极简 YAML 子集，见 docs/04-CONFIG.md）
+# 只支持：section: / key: value / - list item / # 注释
+# ============================================================================
+
+debug: false            # true 时不 daemon 化，并输出 debug 日志
+
+# ---- 代理内核对接（把该设备的 ifindex 写进 map_tun）----
+tun_device: utun            # mihomo tun.device（configs/mihomo/*.yaml 里一致）
+
+# ---- 挂载范围 ----
+ifaces:
+  attach_auto: true        # true=自动发现物理网卡并全挂
+  attach_list:             # attach_auto=false 时才用
+    - wlan0
+    - rmnet_data0
+  exclude:                 # 前缀匹配排除
+    - lo
+    - tun
+    - tap
+    - dummy
+
+# ---- 未命中时的默认行为 ----
+default:
+  verdict: tun            # tun(代理) | direct(直连)；海外默认代理
+  ipv6: true              # 参与 IPv6 分类
+
+# ---- 强制规则段（优先级高于 CNIP）----
+rules:
+  # 强制代理：fake-ip 池（对齐 mihomo fake-ip-range / fake-ip-range6）
+  proxy_cidr4:
+    - 198.18.0.0/15
+  proxy_cidr6:
+    - fdfe:dcba:9876::/64
+
+  # 强制直连（内网/自有网段等；内置已含 rfc1918/链路本地/回环）
+  # direct_cidr4:
+  #   - 10.0.0.0/8
+  # direct_cidr6:
+  #   - fc00::/7
+
+  # UID 白名单（直连，跳过判定）——mihomo 自身的 uid 必须放这，防止回环！
+  # root=0 shell=2000；mihomo 若是普通 apk，用其 appId（如 10101）
+  skip_uid:
+    - 0
+    - 2000
+
+  # ---- 域名规则（v1.1.0，优先级高于 IP 段规则与 CNIP）----
+  # 原理：splitd 用 AF_PACKET 抓 DNS 响应（UDP/53）学习 IP→域名，
+  # 内核 egress 对连接目标 IP 反查域名后做后缀匹配（Clash DOMAIN-SUFFIX 语义）。
+  # 用法：域名为完整后缀，支持 *. 通配（等价去掉通配）与 FQDN 尾点。
+  # 典型场景：强推代理的域名（即使 CDN 解析到国内 IP 也走代理）；
+  #          强推直连的域名（内网设备名、机场反代等）。
+  # 注意：仅当"域名已被 DNS 学习到"时规则才生效——首次解析后才有映射，
+  # 且 TTL 过期会重新学习；超大列表（>64 条）请用 proxy_cidr4/direct_cidr4 或交给 mihomo 规则。
+  proxy_domains:
+    # - "*.github.com"
+    # - "*.google.com"
+    # - "*.steampowered.com"
+  direct_domains:
+    # - "*.lan"
+    # - "*.internal.example.com"
+
+# ---- CNIP 数据源（二选一即可；都留空则纯规则分流）----
+# 注意：建议用绝对路径（避免 splitd 工作目录歧义）。
+# Android 上可直接复用 box 模块的 cn.zone：cp /data/adb/box/run/cn.zone config/cn_cidr_v4.txt
+cnip:
+  path_v4: /data/adb/split/config/cn_cidr_v4.txt
+  path_v6: /data/adb/split/config/cn_cidr_v6.txt
+  # 自动更新：daemon 每 auto_update_hours 用 curl 下载 url_v4/v6 覆盖到 path_v4/v6 后重灌 map。
+  # url 留空 = 只按间隔重读本地文件（不会联网）。0=关闭自动更新。
+  url_v4: https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt
+  url_v6: https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt
+  auto_update_hours: 24   # 1 天

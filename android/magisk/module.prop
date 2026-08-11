@@ -1,0 +1,10 @@
+id=ebpf-split
+name=eBPF-Split (kernel traffic split + mihomo)
+version=1.2.7
+versionCode=10207
+author=split-team
+description=内核级 CNIP(IPv4/IPv6) 分流 + 转发 mihomo TUN；兼容 Magisk/KernelSU/APatch
+support=https://example.invalid/split
+minMagisk=23000
+# KernelSU/APatch 兼容：模块按 Magisk 规范布局，sepolicy.rule 由各 manager 注入；
+# WebUI 由 webroot/ 目录自动识别（KernelSU/APatch Manager 模块详情页可见）。

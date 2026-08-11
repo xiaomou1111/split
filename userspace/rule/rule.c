@@ -1,0 +1,115 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#include "rule.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>   /* AF_INET */
+
+#include "../common/log.h"
+
+static void rule_add_list(struct split_bpf_ctx *ctx,
+                          const char list[][CFG_STRLEN], int n, int which)
+{
+    for (int k = 0; k < n; k++) {
+        if (map_rule_add_cidr(ctx, list[k], which) < 0)
+            LOG_WARNF("规则写入失败: %s", list[k]);
+    }
+}
+
+static void dom_add_list(struct split_bpf_ctx *ctx,
+                         const char list[][CFG_STRLEN], int n, int which)
+{
+    for (int k = 0; k < n; k++) {
+        if (map_dom_add(ctx, list[k], which) < 0)
+            LOG_WARNF("域名规则写入失败: %s", list[k]);
+    }
+}
+
+int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
+{
+    /* 先清空（幂等：remove 配置中已移除的旧项），再全量写入 */
+    map_rule_clear(ctx);
+
+    /* UID 白名单（覆盖式） */
+    for (int k = 0; k < cfg->nskip_uid; k++)
+        map_skip_uid_add(ctx, cfg->skip_uid[k]);
+
+    /* 规则 CIDR */
+    rule_add_list(ctx, cfg->proxy4,  cfg->nproxy4,  RULE_PROXY);
+    rule_add_list(ctx, cfg->proxy6,  cfg->nproxy6,  RULE_PROXY);
+    rule_add_list(ctx, cfg->direct4, cfg->ndirect4, RULE_DIRECT);
+    rule_add_list(ctx, cfg->direct6, cfg->ndirect6, RULE_DIRECT);
+
+    /* v1.1.0 域名规则（先清空再全量，幂等） */
+    map_dom_clear(ctx);
+    dom_add_list(ctx, cfg->dom_proxy,  cfg->ndom_proxy,  RULE_PROXY);
+    dom_add_list(ctx, cfg->dom_direct, cfg->ndom_direct, RULE_DIRECT);
+
+    /* 运行时配置 */
+    map_set_cfg(ctx, cfg->default_verdict, cfg->ipv6_classify ? true : false,
+                cfg->nskip_uid > 0,
+                cfg->ndom_proxy > 0 || cfg->ndom_direct > 0);
+
+    LOG_INFOF("rules 已应用: uid=%d proxy4=%d direct4=%d dom_proxy=%d dom_direct=%d",
+              cfg->nskip_uid, cfg->nproxy4, cfg->ndirect4,
+              cfg->ndom_proxy, cfg->ndom_direct);
+    return 0;
+}
+
+int rule_add(struct split_bpf_ctx *ctx, const char *cidr, int which)
+{
+    return map_rule_add_cidr(ctx, cidr, which);
+}
+
+int rule_del(struct split_bpf_ctx *ctx, const char *cidr, int which)
+{
+    return map_rule_del_cidr(ctx, cidr, which);
+}
+
+/* ---- v1.2.0 运行时规则偏差（H1 修复） ---- */
+
+void rule_overrides_init(struct rule_overrides *rov)
+{
+    memset(rov, 0, sizeof(*rov));
+}
+
+int rule_override_record(struct rule_overrides *rov,
+                         const char *cidr, int which, int present)
+{
+    int k;
+
+    if (!rov || !cidr || !cidr[0] || (which != RULE_PROXY && which != RULE_DIRECT))
+        return -1;
+    /* 同 cidr+which 已存在：覆盖（last-wins） */
+    for (k = 0; k < rov->count; k++) {
+        if (rov->items[k].which == which &&
+            strcmp(rov->items[k].cidr, cidr) == 0) {
+            rov->items[k].present = present ? 1 : 0;
+            return 0;
+        }
+    }
+    if (rov->count >= RULE_OVERRIDE_MAX)
+        return -1; /* 满：拒绝记录，避免 reload 后丢规则 */
+    snprintf(rov->items[rov->count].cidr, CFG_STRLEN, "%s", cidr);
+    rov->items[rov->count].which = (uint8_t)which;
+    rov->items[rov->count].present = present ? 1 : 0;
+    rov->count++;
+    return 0;
+}
+
+void rule_overrides_replay(struct split_bpf_ctx *ctx,
+                           const struct rule_overrides *rov)
+{
+    int k;
+
+    if (!rov)
+        return;
+    for (k = 0; k < rov->count; k++) {
+        const struct rule_override *o = &rov->items[k];
+
+        if (o->present)
+            rule_add(ctx, o->cidr, o->which);
+        else
+            rule_del(ctx, o->cidr, o->which);
+    }
+}

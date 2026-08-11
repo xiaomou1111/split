@@ -1,0 +1,57 @@
+# mihomo 配置 —— fake-ip 模式（体验版）
+#
+# 注意：fake-ip 下应用连的是伪 IP（198.18.x），内核分流器看不到真实 IP，
+#       所以"内核级 CNIP 直连"在此模式下**失效**（流量全部进 mihomo 后
+#       由 mihomo 自己的规则分流）。
+# 若想保留内核分流 → 用同目录的 mihomo-redir-host.yaml。
+# 本模式仍能正常上网/代理，且 DNS 零延迟（fake-ip 特性）。
+
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+ipv6: false
+find-process-mode: off
+
+tun:
+  enable: true
+  stack: gvisor        # eBPF 注入实测 gvisor 最稳（system/mixed 首连慢）
+  device: utun          # ← 与 split.yaml tun_device 一致
+  mtu: 1500            # 与物理网卡对齐，避免 mihomo 默认 9000 引发分片/黑洞
+  gso: false           # vnetHdr(IFF_VNET_HDR) 与 eBPF 裸 IP 注入不兼容（实测）
+  auto-route: false     # 路由交给 eBPF（fake-ip 段的处理见 split.yaml rules）
+  auto-detect-interface: false   # 出口由 eBPF 处理，关闭 mihomo netlink 探测
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16      # ← split.yaml 里 proxy_cidr4 要含 198.18.0.0/15
+  # fake-ip-range6: fdfe:dcba:9876::/64
+  fake-ip-filter:
+    - '*.lan'
+    - '+.local'
+    - 'time.*.com'
+  default-nameserver:
+    - 223.5.5.5
+  nameserver:
+    - https://dns.alidns.com/dns-query
+
+rules:
+  - 'GEOIP,CN,DIRECT'
+  - 'MATCH,PROXY'
+
+proxies:
+  - name: my-node
+    type: ss
+    server: your.server.example
+    port: 8388
+    cipher: aes-128-gcm
+    password: change-me
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - my-node

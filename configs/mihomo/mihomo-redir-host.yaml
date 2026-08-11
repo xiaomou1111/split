@@ -1,0 +1,65 @@
+# mihomo 配置 —— redir-host 模式（推荐）
+#
+# 为什么推荐 redir-host？
+#   eBPF 分流器是在"内核"看目标 IP 的。redir-host 返回"真实 IP"，
+#   应用连接真实 IP → CNIP 直连 / 海外代理全部正确。
+#   （fake-ip 会破坏内核分流，见 docs/03-ANDROID.md 第 4 节）
+
+# ---- 代理监听（给其它 App / 局域网使用）----
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+ipv6: true
+find-process-mode: off
+
+# ---- TUN 模式：由我们接管路由，关闭 auto-route！----
+tun:
+  enable: true
+  stack: gvisor        # eBPF 注入实测 gvisor 最稳（system/mixed 首连慢）
+  device: utun         # ← 必须与 split.yaml 的 tun_device 一致
+  mtu: 1500            # 与物理网卡对齐，避免 mihomo 默认 9000 引发分片/黑洞
+  gso: false           # vnetHdr(IFF_VNET_HDR) 与 eBPF 裸 IP 注入不兼容（实测）
+  auto-route: false    # ★ 关键：/路由由 eBPF 决定，mihomo 不抢
+  auto-detect-interface: false   # 出口由 eBPF 处理，关闭 mihomo netlink 探测
+  # dns-hijack 不要配置（内核已区分），或按需加
+
+# ---- DNS：redir-host + 域名级分流 ----
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: true
+  enhanced-mode: redir-host      # ★ 关键
+  default-nameserver:
+    - 223.5.5.5
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://8.8.8.8/dns-query
+    - https://1.1.1.1/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+      - 100.64.0.0/10
+
+# ---- 规则（海外进 proxy / 其它让内核决定）----
+rules:
+  - 'GEOIP,CN,DIRECT'          # CNIP 兜底（与内核段互为保险）
+  - 'MATCH,PROXY'              # 默认走代理节点（proxy group 名示例）
+
+proxies:
+  - name: my-node
+    type: ss
+    server: your.server.example
+    port: 8388
+    cipher: aes-128-gcm
+    password: change-me
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - my-node

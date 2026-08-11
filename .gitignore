@@ -1,0 +1,25 @@
+# eBPF-Split .gitignore
+# 本仓库当前非 git repo，此文件为将来 `git init` 后即生效的入库排除清单（M7 评审项）。
+# 约定（AGENTS.md）：构建产物/日志/原始敏感配置一律不入库；打包配置只含占位符。
+
+# ---- 构建产物（内核 BPF + 用户态二进制）----
+/build/
+/userspace/build/
+
+# ---- 编译中间文件与产物（兜底）----
+*.o
+*.d
+*.a
+*.so
+
+# ---- 打包产物 ----
+*.zip
+*.tgz
+
+# ---- 运行期日志 ----
+*.log
+
+# ---- 原始敏感配置（AGENTS 硬契约：config.yaml.real 不得入库）----
+config.yaml.real
+*.real
+!*.example

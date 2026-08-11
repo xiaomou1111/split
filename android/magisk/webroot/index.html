@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eBPF-Split 控制台</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>eBPF-Split</h1>
+  <span class="pub">内核分流 · CNIP/规则/域名</span>
+  <span class="pub" id="renderer">—</span>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="status">状态</button>
+  <button class="tab" data-tab="rules">规则</button>
+  <button class="tab" data-tab="logs">日志</button>
+  <button class="tab" data-tab="config">参数</button>
+  <button class="tab" data-tab="actions">开关</button>
+</nav>
+
+<main>
+  <!-- ======== 状态 ======== -->
+  <section id="panel-status" class="panel active">
+    <div class="card-row">
+      <div class="card">
+        <div class="card-head">
+          <h2>运行状态</h2>
+          <button class="btn mini" id="st-refresh">刷新</button>
+        </div>
+        <div class="kv">
+          <span class="k">eBPF 程序</span><span class="v mono" id="st-progfd">—</span>
+          <span class="k">已挂载网卡</span><span class="v mono" id="st-attached">—</span>
+          <span class="k">TUN ifindex</span><span class="v mono" id="st-tun">—</span>
+          <span class="k">CNIP v4/v6</span><span class="v mono" id="st-cnip">—</span>
+          <span class="k">路由接管</span><span class="v" id="st-hijack">—</span>
+          <span class="k">splitd PID</span><span class="v mono" id="st-pid">—</span>
+          <span class="k">存活守护</span><span class="v" id="st-watchdog">—</span>
+          <span class="k">运行时长</span><span class="v mono" id="st-uptime">—</span>
+        </div>
+        <div class="status-dot" id="st-dot" data-on="unknown">未检测</div>
+        <div id="st-warns"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>mihomo 代理</h2></div>
+        <div class="kv">
+          <span class="k">状态</span><span class="v" id="mh-status">—</span>
+          <span class="k">PID</span><span class="v mono" id="mh-pid">—</span>
+          <span class="k">版本</span><span class="v mono" id="mh-ver">—</span>
+          <span class="k">日志</span><span class="v mono" id="mh-log">—</span>
+        </div>
+        <div class="status-dot" id="mh-dot" data-on="unknown">未检测</div>
+        <p class="hint"><a class="jump" data-tab="logs">查看日志</a> · <a class="jump" data-tab="actions">开关</a></p>
+      </div>
+
+      <div class="card">
+        <h2>DNS 学习器（域名分流）</h2>
+        <div class="kv">
+          <span class="k">监听 fd</span><span class="v mono" id="dns-fd">—</span>
+          <span class="k">已学习</span><span class="v mono" id="dns-learned">—</span>
+          <span class="k">跳过</span><span class="v mono" id="dns-skipped">—</span>
+          <span class="k">条目 v4/v6</span><span class="v mono" id="dns-entries">—</span>
+        </div>
+        <p class="hint">域名分流排查看这里：<code>learned</code> 在增长说明 IP→域名映射正在被学习。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>环境信息</h2></div>
+      <div class="kv">
+        <span class="k">内核</span><span class="v mono" id="env-kernel">—</span>
+        <span class="k">架构</span><span class="v mono" id="env-arch">—</span>
+        <span class="k">Android</span><span class="v mono" id="env-android">—</span>
+        <span class="k">SDK</span><span class="v mono" id="env-sdk">—</span>
+        <span class="k">设备</span><span class="v" id="env-device">—</span>
+        <span class="k">SELinux</span><span class="v" id="env-selinux">—</span>
+      </div>
+      <p class="hint">内核/系统版本对照 <code>docs/03-ANDROID.md</code> 能力要求；<code>Enforcing</code> 下 eBPF 加载失败先查 sepolicy 放行。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>内核计数（stats）</h2>
+        <span class="dim" id="st-updated"></span>
+      </div>
+      <div class="stat-grid" id="stats-body"><span class="v dim">暂无数据</span></div>
+      <p class="hint">每次轮询对比增量显示 <code>+N/s</code>；绿色=流量在走，红色=异常计数（正常应为 0）。</p>
+    </div>
+    <p class="hint">数据来自 <code>splitd</code> 的 Unix socket（<code>splitctl status/stats/dns</code>），需 root 权限。</p>
+  </section>
+
+  <!-- ======== 规则 ======== -->
+  <section id="panel-rules" class="panel">
+    <div class="card">
+      <h2>在线规则（加载到内核 map，无需重启）</h2>
+      <div class="field-row">
+        <input id="rule-cidr" type="text" placeholder="CIDR，如 1.2.3.4/32 或 2001:db8::/32">
+        <select id="rule-type">
+          <option value="proxy">proxy</option>
+          <option value="direct">direct</option>
+        </select>
+        <button class="btn primary" id="rule-add">加入</button>
+        <button class="btn danger" id="rule-del">删除</button>
+      </div>
+      <p class="hint">走 <code>splitctl add-rule / del-rule</code>，属追加语义；删减固化请回"参数"页改配置文件。</p>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>在线规则（map 实况）</h2>
+        <span class="dim" id="rules-count"></span>
+      </div>
+      <div id="rules-body"><span class="v dim">加载中…</span></div>
+      <div class="btn-row">
+        <button class="btn" id="rules-refresh">刷新</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======== 日志 ======== -->
+  <section id="panel-logs" class="panel">
+    <div class="card">
+      <h2>日志查看（splitd / mihomo）</h2>
+      <div class="field-row">
+        <select id="log-which">
+          <option value="splitd">splitd.log</option>
+          <option value="mihomo">mihomo.log</option>
+        </select>
+        <button class="btn primary" id="log-refresh">刷新</button>
+        <label class="autorefresh"><input type="checkbox" id="log-auto" checked> 每 5 秒自动刷新</label>
+      </div>
+      <pre class="result log-body" id="log-body">（选择日志并刷新）</pre>
+    </div>
+  </section>
+
+  <!-- ======== 参数 ======== -->
+  <section id="panel-config" class="panel">
+    <div class="card">
+      <div class="card-head"><h2>当前生效配置摘要</h2></div>
+      <div class="kv" id="cfg-summary"><span class="v dim">读取中…</span></div>
+      <p class="hint">从 <code>get-config</code> 解析的关键项速览；完整编辑与校验在下方。</p>
+    </div>
+    <div class="card">
+      <h2>配置编辑器（/data/adb/split/config/split.yaml）</h2>
+      <p class="hint">语法为极简 YAML 子集，仅支持 <code>section:</code>/<code>key: value</code>/<code>- item</code>/<code># 注释</code>，无引号嵌套。</p>
+      <textarea id="cfg-editor" rows="22" spellcheck="false" placeholder="加载中…"></textarea>
+      <div class="btn-row">
+        <button class="btn" id="cfg-load">重新加载</button>
+        <button class="btn primary" id="cfg-validate">校验</button>
+        <button class="btn primary" id="cfg-save">保存并 reload</button>
+      </div>
+      <pre class="result" id="cfg-result"></pre>
+    </div>
+  </section>
+
+  <!-- ======== 开关 ======== -->
+  <section id="panel-actions" class="panel">
+    <div class="card">
+      <h2>守护进程开关</h2>
+      <div class="btn-row">
+        <button class="btn primary" id="act-start" data-cmd="start">启动 splitd</button>
+        <button class="btn" id="act-stop" data-cmd="stop">停止 splitd</button>
+        <button class="btn" id="act-reload" data-cmd="reload">reload</button>
+        <button class="btn" id="act-reload-cnip" data-cmd="reload-cnip">reload-cnip</button>
+      </div>
+      <p class="hint">
+        停止命令走 daemon socket 的 <code>stop</code>；启动会派生 <code>splitd</code>。
+        切换 <code>verdict / ipv6 / skip_uid</code> 等在"参数"页改配置后保存即可。
+      </p>
+    </div>
+    <div class="card">
+      <h2>mihomo 开关</h2>
+      <div class="btn-row">
+        <button class="btn primary" id="act-mihomo-start" data-cmd="mihomo-start">启动 mihomo</button>
+        <button class="btn danger" id="act-mihomo-stop" data-cmd="mihomo-stop">停止 mihomo</button>
+      </div>
+      <p class="hint">随包 mihomo 位于 <code>bin/mihomo</code>，配置目录 <code>mihomo/</code>（<code>config.yaml</code>）。启动前会自动对齐 tun 段契约（<code>auto-route:false</code>）。</p>
+    </div>
+    <div class="card">
+      <h2>后端调用输出</h2>
+      <pre class="result" id="act-result"></pre>
+    </div>
+  </section>
+</main>
+
+<div id="toast" hidden></div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

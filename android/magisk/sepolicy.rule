@@ -1,0 +1,40 @@
+# sepolicy.rule — Magisk / KernelSU / APatch 安装时注入的 SELinux 规则
+#
+# 说明：
+#   - Magisk 在"安装本模块时"把该文件内容编译进当前策略（若 manager 支持）。
+#   - KernelSU / APatch 的 ksud 也会读取并合并 sepolicy.rule。
+#   - 各 root 方案的进程 domain 不同：Magisk→magisk，KernelSU→ksu(或 su)，
+#     APatch→ap，这里一并放行，避免"能力对，domain 没匹配"的静默失败。
+#   - 若管理端不支持，service.sh 里另有 magiskpolicy --live 兜底。
+#   - 类名/权限名以 Android GKI (android 14/15) 为准；老内核若有差异，
+#     对照 `dmesg | grep avc` 自行增删。
+
+allow magisk bpf:bpf {
+    prog_load prog_pin map_create map_read map_write prog_test_run
+    map_get_next_key prog_query
+}
+allow magisk self:unix_stream_socket create_stream_socket connect
+allow magisk tun_device:chr_file rw_file_perms
+allow magisk net_device:netlink_socket create bind connect nlmsg_write
+allow magisk node:unix_stream_socket create_socket_perms
+allow magisk bpffs_t:file rw_file_perms
+allow magisk bpffs_t:dir search create_file_perms
+allow magisk bpffs_t:lnk_file read
+
+allow ksu bpf:bpf { prog_load map_create map_read map_write map_get_next_key }
+allow ksu self:unix_stream_socket create_stream_socket connect
+allow ksu tun_device:chr_file rw_file_perms
+allow ksu net_device:netlink_socket create bind connect nlmsg_write
+allow ksu node:unix_stream_socket create_socket_perms
+
+allow su bpf:bpf { prog_load map_create map_read map_write map_get_next_key }
+allow su self:unix_stream_socket create_stream_socket connect
+allow su tun_device:chr_file rw_file_perms
+allow su net_device:netlink_socket create bind connect nlmsg_write
+allow su node:unix_stream_socket create_socket_perms
+
+allow ap bpf:bpf { prog_load map_create map_read map_write map_get_next_key }
+allow ap self:unix_stream_socket create_stream_socket connect
+allow ap tun_device:chr_file rw_file_perms
+allow ap net_device:netlink_socket create bind connect nlmsg_write
+allow ap node:unix_stream_socket create_socket_perms
