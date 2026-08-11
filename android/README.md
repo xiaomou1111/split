@@ -1,11 +1,12 @@
 ﻿# 安卓兼容层（android/）
 
-本目录是 **eBPF-Split 的安卓落地包**。核心逻辑与桌面 Linux 完全一致，
+本目录是 **eBPF-Split（v1.3.1）的安卓落地包**。核心逻辑与桌面 Linux 完全一致，
 这里解决的是安卓特有的三件事：
 
 1. **权限**：root（Magisk/KernelSU）+ SELinux 放行（sepolicy / magiskpolicy）
 2. **打包**：Magisk 模块结构（`android/magisk/`）
 3. **自检/降级**：`check-kernel.sh` 先探测，不满足就自动退纯 TUN
+4. **存活守护**：`split-watchdog.sh`（splitd 探活拉起 + mihomo TUN 消失自愈，v1.2.9）
 
 ## 装机流程（Magisk 模块）
 
@@ -50,6 +51,7 @@ android/
 │   ├── check-kernel.sh   ← 内核能力探测（返回 0/1）
 │   ├── start-split.sh    ← 手动启动
 │   ├── stop-split.sh     ← 手动停止
+│   ├── split-watchdog.sh ← 存活守护：splitd 探活拉起 + mihomo TUN 消失自愈（v1.2.9）
 │   ├── setup-box-tun.sh  ← 一键接入已有 box 代理（复用 mihomo + 订阅）
 │   └── webuiapi.sh       ← KernelSU WebUI 后端（root，动作白名单）
 ├── magisk/webroot/       ← KernelSU WebUI 前端（index.html + app.js）

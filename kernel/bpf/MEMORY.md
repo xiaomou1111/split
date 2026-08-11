@@ -36,8 +36,12 @@
      首片（0x0001）漏判 dport，且 offset≥8192 的非首片（0x2000）误判为首片（越界检查兜底、
      parse 失败放行，无丢包）。v1.1.4 起 v6 的 TCP/UDP 分头读取 dport（与 IPv4 分支一致）。
 10. **split.bpf.c 的 tun 读取**：`tun_ifindex()` 每次取 map（数组槽 0），无 tun 时 `TC_ACT_OK` 并计 `STAT_MISS_TUN`——mihomo 未就绪时保联网。
-11. **cfg 为 NULL 的兜底**：policy.h 最后一步 `cfg ? cfg->default_verdict : SPLIT_VERDICT_TUN`——map 未初始化时按"默认代理"处理（docs/06 设计取舍：未知→代理是安全默认）。
-    - **v1.2.0 热路径短路（性能）**：`map_cfg` 新增 `skip_uid_enabled`/`dom_enabled` 两个 flag，
+11. **cfg 未初始化的兜底（v1.3.1 修正契约）**：map_cfg 是 **ARRAY map，lookup 永不返回
+    NULL**（未写入时返回全零元素，default_verdict=0=直连）——旧注释"map 未初始化时按默认
+    代理（未知→代理是安全默认）"并不成立。现以 loader `map_set_cfg` 写入的
+    `bpf_trace_enabled==1` 作为"已初始化"哨兵：policy.h 对 `!cfg || cfg->bpf_trace_enabled==0`
+    一律回落 `default_cfg`（TUN 安全默认）。map_set_cfg 失败时 rule.c 显式 LOG_ERROR。
+    - **热路径短路（性能）**：`map_cfg` 的 `skip_uid_enabled`/`dom_enabled` 两个 flag，
       由用户态在 `rule_apply_all` 按 `cfg->nskip_uid>0` / `cfg->ndom_proxy+ndom_direct>0` 写入。
       运行时：
       - `skip_uid_enabled==0` → policy.h 第 1 步整段短路，且 split.bpf.c **不再调用

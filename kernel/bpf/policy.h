@@ -78,11 +78,16 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
                                         __u32 uid,
                                         const struct split_cfg *cfg)
 {
-    /* cfg 为 NULL 时使用安全默认值：ipv6 不分类，默认代理（未知→代理是安全默认，
-     * 与 kernel/bpf/MEMORY.md 第 11 条、split_bpf.h "default_verdict" 注释一致）。 */
+    /* cfg 为 NULL 或"未初始化"时使用安全默认值：ipv6 不分类，默认代理
+     * （未知→代理是安全默认，与 kernel/bpf/MEMORY.md 第 11 条、split_bpf.h
+     * "default_verdict" 注释一致）。
+     * v1.3.1（审查修复）：map_cfg 是 ARRAY map，bpf_map_lookup_elem 永不返回
+     * NULL——未写入时返回全零元素（default_verdict=0=直连），旧注释"map 未
+     * 初始化按默认代理"并不成立。现以 loader 写入的 `bpf_trace_enabled==1`
+     * 作为"已初始化"哨兵：=0 视为未写入/写入失败，回落到 TUN 安全默认。 */
     struct split_cfg default_cfg = { .default_verdict = SPLIT_VERDICT_TUN };
 
-    if (!cfg)
+    if (!cfg || cfg->bpf_trace_enabled == 0)
         cfg = &default_cfg;
 
     /* 1. UID 白名单（mihomo 自身、root、shell）。

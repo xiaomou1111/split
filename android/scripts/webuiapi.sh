@@ -241,10 +241,12 @@ case "$ACTION" in
   mihomo-stop)   mihomo_stop ;;
   add-rule)
     [ -n "$2" ] || { echo "ERR: 缺 CIDR"; exit 1; }
-    run add-rule "$2" "$3" ;;
+    # v1.3.1（审查修复）：未指定 which 时默认 proxy——旧实现传空串给 splitctl，
+    # 后者报 "which 只能是 proxy 或 direct" 而非按默认处理。
+    run add-rule "$2" "${3:-proxy}" ;;
   del-rule)
     [ -n "$2" ] || { echo "ERR: 缺 CIDR"; exit 1; }
-    run del-rule "$2" "$3" ;;
+    run del-rule "$2" "${3:-proxy}" ;;
   get-config)
     [ -f "$CFG" ] && cat "$CFG" || echo "ERR: 无配置文件 $CFG" ;;
   save-config)

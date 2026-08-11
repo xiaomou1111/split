@@ -31,6 +31,11 @@
 - 坑 7（v1.1.8）：**未知 key / 无冒号行打 WARN**——顶层（S_NONE）、各 section（ifaces/default/
   rules/cnip）里的未知 `key: value`，以及 S_NONE 下缺少 ':' 的行，一律 `LOG_WARNF`。此前静默
   忽略，拼错 `tun_device` 之类会被吞掉只剩默认值，排障困难。`handle_scalar` 因此改返回 int。
+- 坑 11（v1.2.9）：**列表 key 声明但无列表项会静默清空默认规则**——`rules:` 节写 `proxy_cidr4:`
+  后没有任何 `- item`（空列表/仅注释）时，覆盖式清零把默认 fake-ip 段 `198.18.0.0/15` 干掉，
+  若 `default:` 节同时 `verdict: direct` 则 fake-ip 流量直连断网。修复：解析结束后对"声明过但
+  结果为 0 项"的四个 CIDR 列表（proxy/direct × v4/v6）打 WARN 点明默认段已清空。空列表仍有意义
+  （用户主动清空某族），只告警不阻断。
 - 坑 8（v1.1.9）：**`cnip` 节 `auto_update_hours` 改 `strtol+endptr` 严格校验**——旧 `atoi`
   对 `"24abc"`/负值/空串静默吞掉（`atoi("abc")=0`=关闭自动更新，拼错即静默失效）。现对
   非法/溢出/负值 WARN 并忽略，合法范围 `0..INT_MAX`。

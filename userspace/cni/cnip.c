@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>       /* fork/execlp/_exit */
+#include <fcntl.h>         /* FD_CLOEXEC（exec curl 前防 fd 泄漏） */
 #include <sys/socket.h>   /* AF_INET */
 #include <sys/wait.h>      /* WEXITSTATUS / waitpid */
 #include <arpa/inet.h>
@@ -109,6 +110,13 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
         return -1;
     }
     if (pid == 0) {
+        /* v1.2.9（审查加固）：exec 前把继承的全部非标准 fd 置 CLOEXEC——
+         * 本进程（daemon 派生的 CNIP 更新子进程）持有 BPF map fd、ctl listen、
+         * netlink watch 等；curl exec 后若继承它们，会成为"不可控进程持着
+         * 系统 fd"的脏现场（curl 短暂运行，危害小但应杜绝）。CLOEXEC 只在
+         * exec 时生效，不影响本进程 exec 前/后续灌 CNIP 对 map fd 的使用。 */
+        for (int fd = 3; fd < 256; fd++)
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
         execlp("curl", "curl", "-L", "--max-time", "60", "-s",
                "-o", tmp_path, url, (char *)NULL);
         /* 只有 exec 失败才到这里（curl 不在 PATH/不可执行） */

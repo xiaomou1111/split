@@ -1,6 +1,6 @@
 ﻿# 构建指导（BUILD.md）
 
-> eBPF-Split v1.2.3 ｜ 从源码到可分发模块的完整构建流程
+> eBPF-Split v1.3.1 ｜ 从源码到可分发模块的完整构建流程
 > 覆盖：Linux 原生构建、arm64 交叉编译、Magisk 模块打包、常见问题
 
 ---
@@ -113,6 +113,8 @@ adb pull /data/local/tmp/mihomo build/arm64/mihomo
 ```
 > 版本号唯一真源是 `kernel/include/split_bpf.h` 的 `SPLIT_VERSION`（v1.1.0 起打包时
 > 自动改写 zip 内 module.prop 的 version/versionCode，不再需要手工同步两处）。
+> **发版递增用 `./scripts/bump-version.sh [patch|minor|major]`**（v1.3.0 起）：读真源递增并同步
+> module.prop / docs/06-ROADMAP.md / 根文档头部版本标注，避免多源漂移。
 
 ---
 

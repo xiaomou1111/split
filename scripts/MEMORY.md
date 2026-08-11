@@ -39,8 +39,9 @@
 - **产物带版本号（v1.0.5）**：VERSION 从 `kernel/include/split_bpf.h` 的 `SPLIT_VERSION` 提取；
   打包前自动清理旧的 `split-magisk-v*.zip`（只保留最新）。
 - **版本同源（v1.1.0 解决"两处硬编码"坑）**：打包时用 SPLIT_VERSION 改写 STAGE 内
-  module.prop 的 `version`（x.y.z 原样）与 `versionCode`（major*100+minor*10+patch，如 1.1.0→110）；
-  版本非法/缺省时跳过改写，module.prop 保留的版本号仅作手工打包兜底。
+  module.prop 的 `version`（x.y.z 原样）与 `versionCode`（**v1.2.7 起无碰撞公式
+  `major*10000+minor*100+patch`**，如 1.2.9→10209、2.0.0→20000；旧式 `major*100+minor*10+patch`
+  会在 1.10.0 与 2.0.0 撞值）；版本非法/缺省时跳过改写，module.prop 保留的版本号仅作手工打包兜底。
 - **KernelSU/APatch（v1.0.5）**：同一 zip 兼容三种 manager（同为 Magisk 模块规范）。除规范名外另
   `cp` 一份 `build/split-ksu-v{VERSION}.zip` 便于识别。`webroot/` 目录随包 → KernelSU/APatch
   Manager 模块详情页自动识别为 WebUI。
@@ -59,9 +60,28 @@
 - 坑（v1.0.2 修复）：`OUT` 用 `mkdir -p "$OUT"` 会把 zip 建成分目录导致失败——应为 `mkdir -p "$(dirname "$OUT")"`。
 - 坑（v1.0.3）：`split.yaml` 移入 `config/` 子目录后，customize.sh 对应解包到 `/data/adb/split/config/`，service.sh/setup-box-tun.sh 用 `CONFIG_DIR` 变量，改结构必须三处同步（gen-magisk.sh / customize.sh / 脚本）。
 
+## bump-version.sh（v1.3.0 新增，版本号唯一变更入口）
+- **背景（版本号管理收敛）**：此前版本号散落 6+ 处（split_bpf.h / module.prop / roadmap /
+  根文档头部 / gen-magisk.sh 公式 / webuiapi.sh 占位符），靠手工同步易漂移；且 scripts/MEMORY.md
+  记录的 versionCode 公式在 v1.2.7 改无碰撞方案后已过时。**约定：唯一真源是 split_bpf.h 的
+  `SPLIT_VERSION "X.Y.Z"`，发版递增一律走本脚本**，禁止手工改派生位置。
+- **同步范围**：`split_bpf.h`（真源）→ `android/magisk/module.prop`（version + versionCode，
+  无碰撞公式与 gen-magisk.sh 一致）→ `docs/06-ROADMAP.md`（旧"（当前）"转历史、顶部插入新版
+  （当前）占位）→ 根文档头部当前版本标注（README/USAGE/BUILD/CODE/android/README，**仅前 5 行，
+  不碰正文功能历史引用**如 "v1.2.9 watchdog 自愈"）。
+- **用法**：`./scripts/bump-version.sh [patch|minor|major] [-y]`（默认 patch；`-y` 跳过交互确认）。
+  递增后**手动**补写 roadmap 新版本的变更摘要（脚本只插入占位行）并 `git diff` 复查无历史引用误改。
+- **不在此处理**：`gen-magisk.sh` 打包时读真源改写 zip 内 module.prop 与 webuiapi.sh 的
+  `SPLIT_VERSION`（`@SPLIT_VERSION@` 占位符注入），无需在 bump 时同步。
+
 ## check-kernel.sh（在 android/scripts/ 下）
 - 设备版 `android/scripts/check-kernel.sh`：查 bpf syscall、verifier 可用性、`/proc/config.gz`，输出 pass/fail 清单；根 `scripts/` 下无该文件（勿引用）。
 
-## split-watchdog.sh（在 android/scripts/ 下，v1.1.7 新增）
+## split-watchdog.sh（在 android/scripts/ 下，v1.1.7 新增 / v1.2.9 增 mihomo TUN 自愈）
 - 打包：gen-magisk.sh 自动收 `android/scripts/*.sh`（本脚本无需单独加进打包清单）。
 - 守护 splitd 存活（doze/LMK 杀后自动重启），详见 `android/MEMORY.md` 专节。
+- **v1.2.9 增 mihomo TUN 自愈**：探活成功但 `splitctl status` 解析出 `tun=0`（mihomo TUN 消失、
+  map_tun=0、代理放行直连）且 `bin/mihomo` 存在时，连续 2 轮确认后先经 mihomo API
+  `PATCH /configs {"tun":{"enable":true}}` 无感恢复；API 不可达/失败则重启 mihomo
+  （先 fix-mihomo-tun.sh 对齐契约）；恢复后 5 分钟冷却（`mihomo_recover_ts`）防循环。
+  **注意**：`curl` 在 Android 上未必存在——API 分支失败自然落到重启分支，重启是保底。

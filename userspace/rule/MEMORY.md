@@ -17,6 +17,7 @@
 3. `rule_add_list` 失败只 `LOG_WARNF`（map 满/非法 CIDR 不中断整体应用）；域名列表同理（`dom_add_list`）。
 4. `map_set_cfg` 写入 default_verdict + ipv6 开关——**这是判定最后一步 / 第 2 步 v6 出口（v1.1.1 起：`ipv6_classify=false` 时 v6 在第 2 步直接直连，不再落到规则/CNIP 分支）的运行时依据**。
    - **v1.2.0：`map_set_cfg` 新签名加 `skip_uid_on`（=`cfg->nskip_uid>0`）与 `dom_on`（=`cfg->ndom_proxy+ndom_direct>0`）**——内核据此短路空 map 分支（UID/域名）的连接，提升热路径吞吐。语义不变（map 空时短路本就 miss）。
+   - **v1.3.1（审查修复）：`map_set_cfg` 返回值必须检查**——map_cfg 是 ARRAY map，写入失败时内核把它当"未初始化"回落到 TUN 安全默认（见 kernel/bpf/MEMORY.md 第 11 条与 policy.h）。若用户配置的 default_verdict 本就是 direct，静默回落会改变分流语义，故失败要 LOG_ERROR。**`bpf_trace_enabled` 兼作初始化哨兵**（loader 置 1），内核凭 `==0` 判定"未写入/写失败"。
 5. skip_uid 默认值（0/2000）在 config_defaults 里，这里只是灌入——改默认白名单去 config.c。
 6. **域名规则与 IP 段规则的前后优先级（v1.1.0）**：内核判定顺序"域名规则"在"proxy/direct CIDR"之前——
    域名是应用层意图，应优先于 IP 段。规则落位在 `map_dom_*` 与 `map_rule_*` 是两套独立 map，
@@ -28,6 +29,9 @@
    - daemon 的 add-rule/del-rule 处理：**先写 map、成功后再记录**（失败不记录，防幻影覆盖）；
    - `rule_overrides_replay(ctx, rov)` 在 reload 的 `rule_apply_all` 之后调用，把运行时偏差重放回去。
    - 语义：跨 reload 保留，但 daemon 重启即丢（不落盘）。只支持 CIDR 规则；域名规则无 CLI 在线增删。
+   - **v1.2.9（审查加固）：cidr ≥ CFG_STRLEN 显式拒绝记录**——此前 snprintf 截断存储，reload
+     重放会写截断串（与运行时 map 的完整 CIDR 不一致）。实际 CIDR 最长 <50B，触发即异常输入，
+     拒绝并 WARN；daemon 侧 add-rule 已先入 map 会如实报"已入 map 但追踪满/非法"。
 
 ## 与本仓库其它模块的关系
 - 依赖 loader 的 `map_skip_uid_add / map_rule_add_cidr / map_set_cfg`。

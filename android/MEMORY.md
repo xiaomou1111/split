@@ -58,6 +58,17 @@
   连续失败指数退避（15s→...→最长 5 分钟），防 BPF 加载失败等死循环刷日志。
   **v1.1.7**：utun 缺失 / splitd 二进制缺失这两个"本次不拉起"分支会 `fails=0`——它们不
   是失败计数，不清会拿陈旧退避拖慢 mihomo 恢复后的首次拉起。
+- **mihomo TUN 自愈（v1.2.9，真机问题修复）**：原 watchdog 只在 **splitd 死亡**路径做动作，
+  "splitd 活着但 mihomo TUN 中途消失（map_tun=0）"是静默降级——代理流量被放行直连
+  （真机症状：`miss_tun` 持续增长、proxy 停滞却无报错；根因如 mihomo 外部控制器
+  （9090 无 secret + allow-lan）把 `tun.enable` 改成 false、或 utun 被系统/外部清理）。
+  现探活成功分支额外解析 `splitctl status` 的 `tun=` 字段：连续 2 轮（默认 15s×2=30s）
+  均为 0 且 `bin/mihomo` 存在 → 先经 mihomo API（`PATCH /configs {"tun":{"enable":true}}`）
+  无感恢复（不丢连接）；API 不可达/失败 → 重启 mihomo（先 fix-mihomo-tun.sh 对齐契约）。
+  恢复后 5 分钟冷却（`mihomo_recover_ts`），防"API 拉起又被外部关掉"导致的循环重启。
+  **v1.3.1（审查修复）：冷却时钟改用 `/proc/uptime` 单调秒**——旧 `date +%s` 在部分设备
+  缺失（回退 echo 0 旁路冷却）且墙钟跳时会失效/误延长；uptime 不随系统时间调整。
+  **注意**：`curl` 在 Android 上未必存在——API 分支失败会自然落到重启分支，重启是保底。
 - **单实例**：脚本自身启动时 kill 旧的自身进程（`pgrep -f split-watchdog.sh`，排除 `$$`）。
 - 与 boot 自启关系：service.sh 在 splitd 起来后拉起；WebUI `start` 也会拉。手动前台
   `start-split.sh`（-d 调试）不拉 watchdog，适合一轮排障。

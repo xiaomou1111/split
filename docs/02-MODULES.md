@@ -119,6 +119,9 @@ L4 平台胶水     android/magisk
 - 域名规则（v1.1.0）：`map_dom_proxy/direct` 由 `rule_apply_all` 一并"先清空再全量"灌入
   （配置字段 `rules: proxy_domains:/direct_domains:`，上限 CFG_DOM_MAX=64 条）。
 - 入口：`rule_apply_all(ctx, cfg)`；在线增删：`rule_add(ctx, cidr, which)` / `rule_del(ctx, cidr, which)`。
+- **运行时规则追踪（v1.2.0）**：`add-rule/del-rule` 先写 map、成功后再 `rule_override_record`
+  记录期望状态（跨 reload 重放，重启即丢）；**v1.2.9 审查加固：cidr ≥ CFG_STRLEN 显式拒绝记录**
+  （此前 snprintf 截断存储，reload 重放会写截断串与运行时 map 不一致）。
 
 ### 2.4 daemon/
 - 生命周期：start (fork daemon 化) / 状态机(init → attach → serving → stop)。
@@ -188,6 +191,9 @@ L4 平台胶水     android/magisk
   `parse_bool()`（支持 true/false/yes/no/on/off/1/0，勿用 atoi）；值/列表项尾空白由 `str_trim_tail()` 清理。
   节头与**列表声明 key 的内联值**（如 `default: tun`、`proxy_cidr4: 1.2.3.0/24`）都会告警提醒
   （v1.2.8 补列表 key 的 `list_key_inline_warn`，防"以为加了规则实际没有"）。
+  **v1.2.9 补空列表告警**：`rules:` 节声明了 `proxy_cidr4/direct_cidr4/proxy_cidr6/direct_cidr6`
+  但无任何 `- item`（空列表/仅注释）时，覆盖式清零会把默认 fake-ip 段 `198.18.0.0/15` 等干掉——
+  解析结束对"声明过但 0 项"的四族列表打 WARN 点明默认段已清空（空列表仍有意义，只告警不阻断）。
 - `netlink.c`：接口枚举（`iface_scan` **必须先 bind()** 再 send/recv）+ `iface_is_physical`
   （名字黑名单 + IFF_UP，exclude 含 lo/tun/**utun**/tap/dummy...），物理判定防回环。
 - `paths.c`：`split_socket_path()` — 优先 `$SPLIT_SOCKET` 环境变量，默认 `/run/splitd.sock`（Android 用 run/splitd.sock）；`split_log_path()`（v1.1.9）— 优先 `$SPLIT_LOG`，默认 `/var/log/splitd.log`。
@@ -202,9 +208,13 @@ L4 平台胶水     android/magisk
   2. 调用 `magiskpolicy --live` 打开 bpf/tc 权限（sepolicy）
   3. 起 mihomo（或要求已装）→ 起 splitd -c config → 拉起 split-watchdog.sh 守护（v1.1.7）
 - `android/scripts/check-kernel.sh`：`uname -r`，尝试 `bpf()` 系统调用探活，输出支持度矩阵。
-- `android/scripts/split-watchdog.sh`（v1.1.7）：splitd 存活守护——15s 探活 `splitctl status`，
+- `android/scripts/split-watchdog.sh`（v1.1.7 / v1.2.9 增 mihomo TUN 自愈）：splitd 存活守护——15s 探活 `splitctl status`，
   失控则按原参数拉起。**停止闸 `run/splitd.disabled` 由 `splitctl stop/start` 直接读写**
   （v1.1.7 起收敛于此，任意 stop 路径都生效，防"刚 stop 又被拉起"；见 android/MEMORY.md）。
+  **v1.2.9 增 mihomo TUN 自愈**：探活成功但解析出 `tun=0`（mihomo TUN 消失、map_tun=0、代理
+  放行直连）且 `bin/mihomo` 存在时，连续 2 轮确认后先经 mihomo API `PATCH /configs
+  {"tun":{"enable":true}}` 无感恢复，API 失败则重启 mihomo（先 fix-mihomo-tun.sh 对齐契约），
+  恢复后 5 分钟冷却防循环——补上"splitd 活着但代理静默失效"这条原 watchdog 的盲区。
 - `android/app/`：预留 binder/service 纯 bone 说明，`start/stop` 由 root shell 完成。
 
 ---

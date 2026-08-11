@@ -193,6 +193,9 @@
   并 5 秒后触发一次 fork 补拉（即使 hours=0 也会跑这一次）；**成功后才清零 boot_once，
   失败保留（v1.1.3 修正）**——hours=0 时若失败即清零，调度条件 `(hours>0 || boot_once)` 恒
   false，"5 分钟后再试"永远不会发生（与 fork 失败分支保持 boot_once 的语义一致）。
+  **v1.3.1（审查修复）：补拉条件收紧为"某族 url 与 path 必须同时配"**——cnip_auto_update
+  对空 path 是 no-op（cnip_fetch_to_path 直接返回 0），旧实现只查 url 会让补拉 fork 空转、
+  静默"成功"但 CNIP 保持 0 条（用户以为已补拉）；url 有 path 无的族不可能落盘。
   未配 url → 打 WARN 提示放 cn_cidr_v4.txt 后 reload-cnip。
 - 子进程退出码：0=成功（按原间隔续期）；非 0=失败（5 分钟后再试，避免离线时每小时刷日志）。
   **v1.2.8（审查修复）**：`waitpid` 失败（如 ECHILD——子进程已被系统回收）时显式清除

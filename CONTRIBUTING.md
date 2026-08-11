@@ -47,6 +47,14 @@ loader: 增加网络切换时 iface_reconcile 重挂
 - 验证：tests/integration.sh（WIFI↔蜂窝切换）
 ```
 
+## 4.5 版本号递增
+
+- **唯一真源**：`kernel/include/split_bpf.h` 的 `SPLIT_VERSION`。
+- **发版递增一律走 `./scripts/bump-version.sh [patch|minor|major]`**——自动同步
+  `module.prop`（version/versionCode）、`docs/06-ROADMAP.md`（当前标注）、根文档头部版本。
+  **不要手工改这些派生位置**（多源漂移根因）。
+- 递增后手动补写 roadmap 新版本变更摘要，并 `git diff` 复查无功能历史引用被误改。
+
 ## 5. 验证清单（提交前）
 
 ```bash

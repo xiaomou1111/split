@@ -24,6 +24,10 @@
    参数原样传给 execve 无 shell 解释，URL 中 `;`/`$()`/反引号等元字符不再有注入面；curl 缺失时
    子进程 _exit(127) 由 waitpid 收回报错）。安卓上**未必有 curl**（Magisk 环境一般不装）→ 手机端
    建议本地放置 cnip 文件或换 wget；这是已知缺口（docs/03、06 已提）。
+   **v1.2.9（审查加固）：exec curl 前对继承的全部非标准 fd 置 `FD_CLOEXEC`**——本进程（daemon
+   派生的 CNIP 更新子进程）持有 BPF map fd / ctl listen / netlink watch，curl exec 后继承即脏现场。
+   循环 `for (fd=3; fd<256; fd++) fcntl(fd, F_SETFD, FD_CLOEXEC)`（对不存在的 fd F_SETFD 返回 -1 无害；
+   CLOEXEC 只在 exec 时生效，不影响 exec 后本进程继续灌 CNIP 用 map fd）。
 4. 行缓冲 `char line[256]`、`one[256]`（v1.1.6 加大）：CNIP 行远小于 256，超 255 字节畸形行
    （`snprintf` 返回所需长度 ≥ 缓冲）整行放弃并按 bad 计数，**不写被截断的 cidr**，
    避免截断导致误分流。旧 `line[128]/one[64]` 会让超长行静默截断成坏 cidr。

@@ -39,7 +39,21 @@ for p in $(pgrep -f "split-watchdog.sh" 2>/dev/null); do
   [ "$p" != "$$" ] && kill "$p" 2>/dev/null
 done
 
+# 单调秒数（/proc/uptime，Android toybox 必有）：用于 mihomo 恢复冷却——
+# 旧实现用 `date +%s`（墙钟）：部分设备无 date +%s（回退 echo 0 旁路冷却），
+# 且墙钟跳时会让冷却失效/误延长。uptime 不随系统时间调整（v1.3.1 审查修复）。
+uptime_s() {
+  _up=""
+  read -r _up _ < /proc/uptime 2>/dev/null
+  case "$_up" in
+    ''|*[!0-9.]*) echo 0 ;;
+    *) echo "${_up%%.*}" ;;
+  esac
+}
+
 fails=0
+mihomo_tun_fails=0
+mihomo_recover_ts=0
 while :; do
   sleep "$INTERVAL"
 
@@ -50,8 +64,39 @@ while :; do
   fi
 
   # splitd 探活：ctl socket 通 = 活着（含 splitctl start/WebUI 派生的实例）
-  if "$BIN_DIR/splitctl" status >/dev/null 2>&1; then
+  # v1.2.9：探活成功但 map_tun=0（mihomo TUN 消失）也要自愈——这是"splitd 活着
+  # 但代理全放行直连"的静默降级（真机症状：miss_tun 持续增长、proxy 停滞却无报错）。
+  # 原逻辑只在 splitd 死亡路径做动作，mihomo tun 丢失时 watchdog 完全无感知。
+  if status_out=$("$BIN_DIR/splitctl" status 2>/dev/null); then
     fails=0
+    tun=$(printf '%s' "$status_out" | sed -n 's/.*tun=\([0-9]*\).*/\1/p' | head -n1)
+    if [ -n "$tun" ] && [ "$tun" = "0" ]; then
+      mihomo_tun_fails=$((mihomo_tun_fails + 1))
+      # 连续 2 轮（默认 15s×2=30s）确认缺失才动作，防瞬时抖动误重启
+      if [ "$mihomo_tun_fails" -ge 2 ] && [ -x "$BIN_DIR/mihomo" ]; then
+        now=$(uptime_s)
+        if [ "$now" -ge "$mihomo_recover_ts" ]; then
+          log "splitd 存活但 map_tun=0（mihomo TUN 消失），尝试恢复 mihomo TUN"
+          # 恢复优先级：先经 mihomo 外部控制器把 tun.enable 拉回 true（无感、不丢连接）；
+          # API 不可达/失败再重启 mihomo（断开但保证重建 utun）。
+          if ! curl -s -m 3 -X PATCH http://127.0.0.1:9090/configs \
+               -d '{"tun":{"enable":true}}' >/dev/null 2>&1; then
+            log "mihomo API 恢复失败，重启 mihomo"
+            pkill -f "$BIN_DIR/mihomo" 2>/dev/null
+            sleep 2
+            if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ] && [ -f "$INSTALL_DIR/mihomo/config.yaml" ]; then
+              "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" >> "$LOG" 2>&1 || true
+            fi
+            "$BIN_DIR/mihomo" -d "$INSTALL_DIR/mihomo" >> "$LOG_DIR/mihomo.log" 2>&1 &
+          fi
+          # 恢复动作后 5 分钟冷却，防 API 拉了又被外部关掉导致循环重启
+          mihomo_recover_ts=$((now + 300))
+          mihomo_tun_fails=0
+        fi
+      fi
+    else
+      mihomo_tun_fails=0
+    fi
     continue
   fi
 

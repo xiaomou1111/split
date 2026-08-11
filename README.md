@@ -1,6 +1,6 @@
 # eBPF-Split — 内核级 CNIP/域名分流流量转发框架
 
-> v1.1.0 ｜ 用 eBPF 在**内核**完成"去往中国大陆的流量直连、海外流量进代理"的分流，
+> v1.3.1 ｜ 用 eBPF 在**内核**完成"去往中国大陆的流量直连、海外流量进代理"的分流，
 > 再把需要代理的流量转发给 **mihomo(Clash/Meta)** 等任意 TUN 代理内核。
 > v1.1.0 起支持**域名分流**（DNS 学习 + 内核域名后缀规则表）。
 > 设计目标：**高可读、强模块化、安卓优先兼容**。
@@ -81,8 +81,8 @@ split/
 │   └── Makefile
 │
 ├── android/                   ← ④ 安卓兼容层
-│   ├── magisk/                Magisk 模块骨架（customize/service/sepolicy）
-│   ├── scripts/               起停/setup-box-tun/check-kernel
+│   ├── magisk/                Magisk 模块骨架（customize/service/sepolicy/webroot）
+│   ├── scripts/               起停/守护 watchdog/setup-box-tun/check-kernel/WebUI 后端
 │   ├── app/                   (预留) 原生 App
 │   ├── README.md
 │   └── MEMORY.md              安卓模块记忆文档
@@ -97,6 +97,7 @@ split/
 ├── scripts/                   ← ⑥ 辅助脚本（构建/调试/发布）
 │   ├── build.sh               顶层构建
 │   ├── build_arm64.sh         交叉编译 arm64（Android 真机）
+│   ├── bump-version.sh        版本号一键递增（唯一真源 split_bpf.h，v1.3.0）
 │   ├── fetch-cnip.sh          更新 CNIP 源
 │   ├── gen-magisk.sh          打包 Magisk zip（带版本号）
 │   └── load-debug.sh          宿主机(Linux)调试加载
@@ -135,7 +136,7 @@ curl https://www.baidu.com       # 直连（不经过 mihomo）
 ./userspace/build/splitctl stats # 内核计数
 ```
 
-> 安卓（Magisk/KernelSU/APatch）安装：`make android` 生成 `build/split-magisk-v1.1.0.zip`（及 `build/split-ksu-v1.1.0.zip` 别名），
+> 安卓（Magisk/KernelSU/APatch）安装：`make android` 生成 `build/split-magisk-v{VERSION}.zip`（及 `build/split-ksu-v{VERSION}.zip` 别名），
 > 见 `android/README.md` 与 `docs/03-ANDROID.md`；完整构建流程见 `BUILD.md`。
 
 ---

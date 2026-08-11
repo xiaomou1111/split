@@ -170,6 +170,11 @@ int config_load(const char *path, struct split_config *cfg)
     char line[512];
     int section = S_NONE;
     char cur_list = 0; /* 0:无 1:attach 2:exclude 3:proxy4 ... 9:dom_direct */
+    /* v1.2.9：rules 节列表声明标志——列表 key 是"覆盖式"（声明即清零默认计数），
+     * 若声明了却没有任何 "- item"（空列表/仅注释），默认规则会被静默清空
+     * （如默认 fake-ip 段 198.18.0.0/15），解析结束时据此告警。 */
+    int declared_proxy4 = 0, declared_proxy6 = 0;
+    int declared_direct4 = 0, declared_direct6 = 0;
 
     /* 先打开文件再写默认值（v1.1.4 修正）：此前 config_defaults 在 fopen 之前执行，
      * 文件打不开时 cfg 已被重置成默认值——daemon reload 的"失败沿用内存配置"
@@ -284,7 +289,7 @@ int config_load(const char *path, struct split_config *cfg)
                 if (strcmp(p, "attach_auto") == 0) { cfg->attach_auto = parse_bool(v); cur_list = 0; }
                 else if (strcmp(p, "attach_list") == 0) { cur_list = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "exclude") == 0) { cur_list = 2; list_key_inline_warn(p, v); }
-                else LOG_WARNF("ifaces 下未知配置 key: %s", p);
+                else { LOG_WARNF("ifaces 下未知配置 key: %s", p); cur_list = 0; }
                 continue;
             }
             if (section == S_DEFAULT) {
@@ -293,14 +298,16 @@ int config_load(const char *path, struct split_config *cfg)
                 continue;
             }
             if (section == S_RULES) {
-                if (strcmp(p, "proxy_cidr4") == 0)  { cfg->nproxy4  = 0; cur_list = 3; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "proxy_cidr6") == 0)  { cfg->nproxy6  = 0; cur_list = 4; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "direct_cidr4") == 0) { cfg->ndirect4 = 0; cur_list = 5; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "direct_cidr6") == 0) { cfg->ndirect6 = 0; cur_list = 6; list_key_inline_warn(p, v); }
+                if (strcmp(p, "proxy_cidr4") == 0)  { cfg->nproxy4  = 0; cur_list = 3; declared_proxy4 = 1; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "proxy_cidr6") == 0)  { cfg->nproxy6  = 0; cur_list = 4; declared_proxy6 = 1; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "direct_cidr4") == 0) { cfg->ndirect4 = 0; cur_list = 5; declared_direct4 = 1; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "direct_cidr6") == 0) { cfg->ndirect6 = 0; cur_list = 6; declared_direct6 = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "skip_uid") == 0)     { cfg->nskip_uid = 0; cur_list = 7; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "proxy_domains") == 0)  { cfg->ndom_proxy  = 0; cur_list = 8; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "direct_domains") == 0) { cfg->ndom_direct = 0; cur_list = 9; list_key_inline_warn(p, v); }
-                else LOG_WARNF("rules 下未知配置 key: %s", p);
+                /* v1.3.1（审查修复）：未知 key 不清 cur_list 会让其后的 "- item" 行
+                 * 被并入上一个列表（静默误分流）。未知 key 一律复位当前列表。 */
+                else { LOG_WARNF("rules 下未知配置 key: %s", p); cur_list = 0; }
                 continue;
             }
             if (section == S_CNIP) {
@@ -333,6 +340,20 @@ int config_load(const char *path, struct split_config *cfg)
     }
 
     fclose(fp);
+
+    /* v1.2.9：空列表告警——声明了列表 key 但最终 0 项（空列表/仅注释），
+     * 默认规则已被"覆盖式"清零且用户无感知。fake-ip 段丢失后若同时
+     * default 节 verdict 配成 direct，mihomo fake-ip 流量会被直连断网。 */
+    if (declared_proxy4 && cfg->nproxy4 == 0)
+        LOG_WARNF("rules: 声明了 proxy_cidr4 但无列表项，默认 fake-ip 段 198.18.0.0/15 已被清空"
+                  "（如需保留请补 \"- 198.18.0.0/15\"）");
+    if (declared_proxy6 && cfg->nproxy6 == 0)
+        LOG_WARNF("rules: 声明了 proxy_cidr6 但无列表项，代理 v6 规则为空");
+    if (declared_direct4 && cfg->ndirect4 == 0)
+        LOG_WARNF("rules: 声明了 direct_cidr4 但无列表项，默认内网直连段（10/8 等）已被清空");
+    if (declared_direct6 && cfg->ndirect6 == 0)
+        LOG_WARNF("rules: 声明了 direct_cidr6 但无列表项，默认 v6 直连段（fe80::/10 等）已被清空");
+
     return 0;
 }
 

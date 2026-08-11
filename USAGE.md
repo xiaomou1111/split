@@ -1,6 +1,6 @@
 ﻿# eBPF-Split 使用说明书
 
-> 版本 v1.1.0 ｜ 面向：想在 Linux / Android 真机上用起来的人
+> 版本 v1.3.1 ｜ 面向：想在 Linux / Android 真机上用起来的人
 > 目标读者：能看懂 shell 命令、会 root 的普通用户。代码细节见 `docs/`。
 
 ---
@@ -219,6 +219,10 @@ IP 判定，**绝不丢包**。`splitctl dns` 查看学习器状态（learned/en
 限制：只学 IPv4 传输的 DNS 响应；TCP/53 与 IP 分片不学习（已知缺口）；
 CNAME 链中每条 A/AAAA 按**自身 owner name** 学习（v1.2.7）。
 
+> **rules 空列表告警（v1.2.9）**：声明了 `proxy_cidr4/direct_cidr4/proxy_cidr6/direct_cidr6`
+> 但没有任何 `- item` 时，默认规则（fake-ip 段/内网直连段）会被覆盖式清空——启动/reload
+> 日志会打 WARN 点明，请检查配置是否为误写（空列表用于"主动清空某族"是合法的）。
+
 ---
 
 ## 4. 命令参考（splitctl）
@@ -264,7 +268,7 @@ splitctl validate -c cfg             # 只校验配置
 | parse_err | 解析失败（放行） | 应≈0 |
 | redirect_err | 重定向失败 | 恒 0 为佳 |
 | dropped | 丢包（不应发生） | 恒 0 |
-| miss_tun | 想代理但 tun 未就绪（放行） | 启动初期可出现 |
+| miss_tun | 想代理但 tun 未就绪（放行） | 启动初期可出现；**持续增长 = mihomo TUN 消失（v1.2.9 watchdog 自愈，见 Q8）** |
 | dom_proxy | 域名规则命中→代理（v1.1.0） | 访问规则域名后 +1 |
 | dom_direct | 域名规则命中→直连（v1.1.0） | 访问规则域名后 +1 |
 
@@ -305,6 +309,14 @@ splitctl validate -c cfg             # 只校验配置
 ### Q7. 节点 alive 但访问超时
 → 是 mihomo 节点自身的连通性问题（订阅/出口），不是框架问题。
 
+### Q8. 代理突然全部放行直连，`miss_tun` 持续增长（v1.2.9 自愈）
+→ 根因：mihomo 的 TUN 中途消失（`tun.enable` 被外部控制器（9090）改 false、或 utun 被系统/外部
+清理）→ splitd 的 `map_tun` 置 0 → 代理流量被放行直连，`splitctl stats` 里 `miss_tun` 持续增长
+却无报错。自 v1.2.9 起 `split-watchdog.sh` 已内置自愈：连续 2 轮探活到 `tun=0` 且 `bin/mihomo`
+存在时，先经 mihomo API（`PATCH /configs {"tun":{"enable":true}}`）无感恢复，失败则重启 mihomo，
+恢复后 5 分钟冷却。若仍复现，检查 `logs/splitd.log` 的 `[wd]` 前缀日志与 mihomo 9090 是否有
+外部进程改配置（建议给 mihomo `external-controller` 设 `secret` 或改为仅 127.0.0.1 监听）。
+
 ---
 
 ## 6. 卸载
@@ -330,4 +342,4 @@ sudo tc qdisc del dev <iface> clsact   # 逐个物理网卡
 | 术语/FAQ | docs/05-GLOSSARY.md |
 | 路线图/已知缺口 | docs/06-ROADMAP.md |
 
-> 源码在 Windows 编写，目标 Linux（含 Android GKI）。仓库不是 git repo。
+> 源码在 Windows 编写，目标 Linux（含 Android GKI）。仓库由 `git` 管理。

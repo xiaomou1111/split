@@ -1,6 +1,6 @@
 # 代码说明书（CODE.md）
 
-> eBPF-Split v1.1.0 ｜ 面向：想读懂/改这份代码的开发者
+> eBPF-Split v1.3.1 ｜ 面向：想读懂/改这份代码的开发者
 > 先读：`README.md`（架构总览）→ 本文（代码细节）→ 各模块 `MEMORY.md`（改前必读）
 
 ---
@@ -69,6 +69,7 @@ split.bpf.c ──> parse.h（解析）──> policy.h（裁决）──> radix
 | map_rule_direct4/6 | LPM_TRIE | lpm_key4/6 | 8192 | 强制直连段 |
 | map_dns4/6（v1.1.0） | HASH | u32 / u8[16] | 4096 | IP→域名（学习器写入，TTL 过期） |
 | map_dom_proxy/direct（v1.1.0） | LPM_TRIE | dom_key | 8192 | 域名后缀规则（反转存储，value=dom_rule.len） |
+| map_rawip（v1.1.5） | HASH | u32 ifindex | 128 | RAWIP 接口集合（蜂窝 rmnet_data*，ARPHRD_RAWIP=519，无 L2 头，内核据此跳过以太网解析） |
 | map_skip_uid | HASH | u32 | 64 | UID 白名单（防回环） |
 | map_tun | ARRAY | u32 | 1 | tun ifindex |
 | map_cfg | ARRAY | u32 | 1 | split_cfg 运行时配置 |
@@ -167,6 +168,7 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 | config `tun0\n` 匹配失败 | str_trim_tail() 清尾空白 |
 | mihomo 收不到 redirect 包 | `skb->queue_mapping=0` |
 | 熄屏/doze 后代理失效、mihomo 只剩自身 DNS | v1.1.7 双重自愈：daemon 主循环 5s 节流 `iface_reconcile`（防 netlink 事件漏收导致挂载陈旧，`split_attach_iface` 幂等去重经 `bpf_tc_query` 核验 filter 真实存在，丢失即重挂）+ `split-watchdog.sh` 探活拉起（防 splitd 进程死亡后 map_tun 无人维护）。停止闸收敛到 `splitctl stop/start`（`gate_set/gate_clear`），任意 stop 路径统一防"刚 stop 又被拉起" |
+| splitd 存活但 mihomo TUN 消失（map_tun=0、代理全放行直连） | **v1.2.9：`split-watchdog.sh` 探活分支解析 `tun=` 字段**——连续 2 轮为 0 且 `bin/mihomo` 存在 → 先经 mihomo API 无感恢复 `tun.enable`（`PATCH /configs`），API 失败重启 mihomo，恢复后 5 分钟冷却。真机症状（miss_tun 持续增长却无报错）见 USAGE.md Q8 |
 | mihomo auto-route 接管路由 → 分流静默失效 | daemon 每 10s 检测路由接管（status hijack 字段）+ service.sh/WebUI 启动前 fix-mihomo-tun.sh 幂等修复 |
 | CNIP 文件缺失 → direct_cn 恒 0 无报错 | status 报 cnip4/6 条数（0=缺失）+ 配 url 时启动自动补拉一次 |
 | mihomo gso 不兼容 | 保持 gso:false + stack:gvisor |

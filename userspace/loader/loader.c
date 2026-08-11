@@ -403,6 +403,11 @@ int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on
     uint32_t zero = 0;
     struct split_cfg cfg = {
         .default_verdict = default_verdict,
+        /* 初始化标记（v1.3.1）：map_cfg 是 ARRAY map，lookup 永不返回 NULL——
+         * 未写入时返回全零元素（default_verdict=0=直连），与文档"未知→代理
+         * 安全默认"相悖。bpf_trace_enabled 置 1 作为"已初始化"哨兵，内核
+         * policy.h 据此把"未初始化/写入失败"回落到 TUN 安全默认（见 policy.h）。 */
+        .bpf_trace_enabled = 1,
         .ipv6_classify = ipv6_on ? 1 : 0,
         .skip_uid_enabled = skip_uid_on ? 1 : 0,
         .dom_enabled = dom_on ? 1 : 0,

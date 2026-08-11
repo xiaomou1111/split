@@ -15,12 +15,19 @@
 - [x] **域名分流（v1.1.0）**：用户态 AF_PACKET 学 DNS 响应（IP→域名）+ 内核
   `map_dom_proxy/direct` 域名后缀规则（反转 LPM 匹配，优先级高于 IP 段规则）
 - [x] **熄屏/doze 自愈（v1.1.7）**：daemon 主循环 5s 节流 `iface_reconcile`（netlink 事件漏收
-  时自动重建挂载，且 `split_attach_iface` 经 `bpf_tc_query` 核验 filter 真实存在、丢失即重挂）
+   时自动重建挂载，且 `split_attach_iface` 经 `bpf_tc_query` 核验 filter 真实存在、丢失即重挂）
   + `scripts/split-watchdog.sh`（splitd 进程死亡后按同参数拉起，配停止闸）
+- [x] **mihomo TUN 自愈（v1.2.9）**：`split-watchdog.sh` 探活分支解析 `tun=` 字段，`map_tun=0`
+  （mihomo TUN 消失、代理静默放行直连）连续 2 轮且 `bin/mihomo` 存在 → 先经 mihomo API
+  `PATCH /configs {"tun":{"enable":true}}` 无感恢复，API 失败重启 mihomo，5 分钟冷却防循环——
+  补上"splitd 活着但代理失效"这条原 watchdog 盲区（真机问题）
 - [x] **文档：架构 / 模块说明书 / 安卓兼容 / 配置 / 术语**
 - [x] **v1.1.9 审查收敛**：DNS 过期时钟改 BOOTTIME（熄屏也推进，`bpf_ktime_get_boot_ns`，需内核 ≥5.8）；
   `iface_reconcile` 全程快照复用去重复 scan；`splitctl` 的 `-d` 语义改为 debug、splitd 路径改 `-s`；
   日志路径收敛 `split_log_path()`；补 `.gitignore`（构建产物/敏感配置不入库）
+- [x] **v1.2.9 审查加固**：CNIP 更新子进程 exec curl 前 fd 全置 `FD_CLOEXEC`；config 空列表告警
+  （声明规则列表但无项 → 默认 fake-ip/内网段被静默清空可见）；运行时规则 cidr 超长显式拒绝
+  （防 snprintf 截断 → reload 重放写截断串）
 
 ## 缺口（诚实清单）
 
@@ -53,8 +60,8 @@ v1.0.2                修复 WSL2 实测发现的 3 个 bug：netlink bind、con
                        端到端接入 box mihomo TUN：CN 直连/海外代理全链路验证通过
                        真机再修 2 bug：config 布尔解析(parse_bool)、utun 误挂回环(exclude)
 v1.0.3                TUN redirect 研究：曾误判"mihomo 无法接受 bpf_redirect 注入"
-v1.0.4（当前）        **根因找到并修复：skb->queue_mapping=0**（tun 多队列索引越界→drop）。
-                      真机验证：curl google 200、Play 可用、内核 CNIP 分流 + mihomo 全链路打通
+v1.0.4                 **根因找到并修复：skb->queue_mapping=0**（tun 多队列索引越界→drop）。
+                       真机验证：curl google 200、Play 可用、内核 CNIP 分流 + mihomo 全链路打通
 v1.1.0                域名分流：用户态 DNS 学习（AF_PACKET）+ 内核域名后缀规则表
 v1.1.9                安全/健壮性审查轮次（CNAME 预过滤修正、逐位解析加固等）
 v1.2.0                运行时规则（add-rule/del-rule）跨 reload 保留；dns 缓冲复用；CNAME 链学习
@@ -75,7 +82,7 @@ v1.2.6                 源码修正 + 按类型兜底：mihomo Alpha listener/si
                        假设的 tunN。tun_name_like 直接认 "Meta"；tun_find_drift 追加
                        ARPHRD_NONE（L3 TUN）类型兜底，覆盖重载后落到任意 device 名（含 WebUI
                        把 device 改空），排除 wg/tailscale 防误挂
-v1.2.7（当前）        审查修复轮次：①DNS 学习器移除 cBPF 内核预过滤（RAWIP 蜂窝偏移错位致
+v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核预过滤（RAWIP 蜂窝偏移错位致
                        静默漏学，改用户态全过滤，Ethernet/RAWIP 双布局正确）②A/AAAA 记录按
                        自身 owner 归属（旧方案归属到查询名/CNAME 目标，多 owner 应答错配）
                       ③poll 错误事件（POLLERR/HUP/NVAL）显式消费防忙循环，ctl listen/netlink
@@ -84,6 +91,39 @@ v1.2.7（当前）        审查修复轮次：①DNS 学习器移除 cBPF 内�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
+v1.3.1（当前）        v1.3.0 审查修复批次（6 项）：
+                        ①**map_cfg 安全默认契约修正**：map_cfg 是 ARRAY map、lookup 永不 NULL，
+                          未写入返回全零元素（default_verdict=0=直连），与"未知→代理安全默认"
+                          相悖。loader `map_set_cfg` 置 `bpf_trace_enabled=1` 作"已初始化"哨兵，
+                          内核 policy.h 凭 `==0` 回落 TUN 安全默认；rule.c 对 map_set_cfg 失败
+                          LOG_ERROR（不再静默）
+                        ②**CNIP 缺失补拉收紧**：仅"某族 url 与 path 同时配置"才补拉——
+                          空 path 时 cnip_auto_update 是 no-op，旧实现 fork 空转静默"成功"
+                          但 CNIP 保持 0 条；url 有 path 无补专门 WARN
+                        ③**config 未知 key 复位 cur_list**：rules/ifaces 节未知 key 后跟
+                          "- item" 会被并入上一列表（静默误分流），现已复位
+                        ④daemon ctl_stats 注释 13→12（names 数组实际 12 项）
+                        ⑤**watchdog 冷却改单调时钟**：`date +%s`（墙钟）在部分设备缺失回退
+                          echo 0 旁路冷却、跳时失效——改用 /proc/uptime 单调秒
+                        ⑥webuiapi add-rule/del-rule 未指定 which 默认 proxy（旧传空串报错）
+v1.3.0        版本号管理统一 + 文档全量同步：
+                       ①新增 scripts/bump-version.sh：唯一真源 split_bpf.h，一键递增 patch/minor/major
+                         （默认 patch），自动同步 module.prop（version+versionCode 无碰撞公式
+                         major*10000+minor*100+patch）、docs/06-ROADMAP.md（当前标注）、
+                         根文档头部版本标注；AGENTS/CONTRIBUTING/BUILD/scripts-MEMORY 同步约定
+                       ②修 scripts/MEMORY.md 过时 versionCode 公式（major*100+minor*10+patch
+                         → 无碰撞方案，与 gen-magisk.sh 一致）
+                       ③根文档版本号统一并同步递增（README/USAGE/BUILD/CODE/android/README），
+                         watchdog mihomo TUN 自愈 / config 空列表告警 / rule 超长拒绝 写入各层文档
+                       ④清理冗余构建目录 userspace/build/arm64、修 .gitignore 过时注释
+v1.2.9        审查加固 + 真机问题修复：
+                       ①CNIP 更新子进程 exec curl 前对全部继承 fd 置 FD_CLOEXEC（防 fd 泄漏脏现场）
+                      ②config 空列表告警（rules 声明 proxy/direct 列表但无项 → 默认规则被静默清空可见）
+                      ③运行时规则 cidr 超长显式拒绝（防 snprintf 截断 → reload 重放写截断串）
+                      ④split-watchdog 增 mihomo TUN 自愈（真机问题：splitd 存活但 mihomo TUN 中途
+                       消失（如 9090 外部控制器改 tun.enable、utun 被清理）→ map_tun=0、miss_tun
+                       持续增长、代理全放行直连且无报错；watchdog 探活分支解析 tun= 连续 2 轮为 0
+                       时经 mihomo API 无感恢复，API 失败重启 mihomo，5 分钟冷却防循环）
 v1.2                  BPF 单元测试（回环注入最小包）+ CI
 v1.3                  Android App MVP：开关 + stats 展示（root/JNI）
 v1.4                  可选：DNS 拦截模块增强（TCP/53、分片重组、CNAME 链）

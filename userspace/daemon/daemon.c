@@ -223,7 +223,7 @@ static void ctl_stats(int c, struct split_bpf_ctx *ctx)
         return;
     }
     ctl_reply(c, "OK");
-    /* v1.1.9：以 names[] 元素数（此处 13=STAT_DIRECT_V6+1）为上界，与 STAT_MAX
+    /* v1.1.9：以 names[] 元素数（此处 12=STAT_DIRECT_V6+1）为上界，与 STAT_MAX
      * 取小——新增统计段时加 names 项即可自动扩展，避免硬编码 10 不同步。 */
     for (k = 0; k < STAT_MAX &&
                 k < (int)(sizeof(names) / sizeof(names[0])); k++)
@@ -848,13 +848,23 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
 
         map_cnip_count(&ctx, &n4, &n6);
         if (n4 == 0 && n6 == 0) {
-            if (cfg.cnip4_url[0] || cfg.cnip6_url[0]) {
-                LOG_WARNF("CNIP 0 条且配置了 url，5 秒后自动补拉（url_v4=%s）",
+            /* v1.3.1（审查修复）：仅当"某族配了 url 且该族配了本地 path"时才补拉——
+             * cnip_auto_update 的 cnip_fetch_to_path 对空 path 直接返回 0（no-op），
+             * 旧实现只查 url 会让补拉 fork 空转、静默"成功"但 CNIP 保持 0 条（用户
+             * 以为已补拉）。url 有、path 无的族不可能落盘，直接判"不可补拉"。 */
+            if ((cfg.cnip4_url[0] && cfg.cnip4_path[0]) ||
+                (cfg.cnip6_url[0] && cfg.cnip6_path[0])) {
+                LOG_WARNF("CNIP 0 条且配置了可用的 url+path，5 秒后自动补拉（url_v4=%s）",
                           cfg.cnip4_url[0] ? cfg.cnip4_url : "(无)");
                 cnip_boot_once = 1;
                 cnip_next_ms = now_ms() + 5000LL;
             } else {
-                LOG_WARNF("CNIP 0 条且未配置 url：请放置 cn_cidr_v4.txt/v6.txt 后 reload-cnip");
+                if ((cfg.cnip4_url[0] && !cfg.cnip4_path[0]) ||
+                    (cfg.cnip6_url[0] && !cfg.cnip6_path[0]))
+                    LOG_WARNF("CNIP 0 条：配置了 url 但对应族缺 path_v4/path_v6（无法落盘），"
+                              "请补齐 path 或放置 cn_cidr_v4.txt/v6.txt 后 reload-cnip");
+                else
+                    LOG_WARNF("CNIP 0 条且未配置 url：请放置 cn_cidr_v4.txt/v6.txt 后 reload-cnip");
             }
         }
     }

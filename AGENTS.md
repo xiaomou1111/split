@@ -72,6 +72,16 @@
 - libbpf 交叉编译放持久目录（如 `/root/bpf_deps`），勿放 `/tmp`（WSL 会清）。
 - Windows 下无法编译，只能审查代码正确性。
 
+## 版本号管理（唯一真源 + 一键递增）
+
+- **唯一真源**：`kernel/include/split_bpf.h` 的 `SPLIT_VERSION "X.Y.Z"`。
+- **发版递增一律走 `./scripts/bump-version.sh [patch|minor|major]`**（v1.3.0 起），
+  它会同步 `module.prop`(version/versionCode)、`docs/06-ROADMAP.md`（当前标注）、
+  根文档头部版本标注。**禁止手工改派生位置**，避免多源漂移。
+- versionCode 无碰撞公式：`major*10000+minor*100+patch`（与 gen-magisk.sh 一致）。
+- 打包时 `gen-magisk.sh` 读真源改写 zip 内 module.prop / webuiapi.sh 的 `SPLIT_VERSION`。
+- 递增后需手动补写 roadmap 新版本变更摘要并复查无历史引用误改。
+
 ## 验证清单（提交前）
 
 ```bash

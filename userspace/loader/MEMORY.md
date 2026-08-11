@@ -10,6 +10,9 @@
   - **`map_set_cfg`（v1.2.0）签名改为 `(ctx, default_verdict, ipv6_on, skip_uid_on, dom_on)`**：
     新增 `skip_uid_on`/`dom_on` 两个短路 flag，供内核热路径跳过空 map 的查表
     （对应 `split_cfg.skip_uid_enabled`/`dom_enabled`）。**唯一调用方 rule.c 必须同步传值。**
+    **v1.3.1（审查修复）：内部把 `bpf_trace_enabled` 置 1 作为"已初始化"哨兵**——
+    map_cfg 是 ARRAY map lookup 永不 NULL，未写入时返回全零元素（default_verdict=0=直连），
+    与"未知→代理安全默认"契约相悖；内核 policy.h 凭 `bpf_trace_enabled==0` 回落 TUN。
   - **`map_get_tun`（v1.0.6 新增）**：读 map_tun 当前 ifindex，供 daemon `tun_sync` 做"变化才写"的
     对齐（见 daemon/MEMORY.md tun 存活同步节）。
 - v1.1.0 域名分流接口：`map_dom_add/del/clear`（域名规则）、`map_dns_set/prune/count`（学习器写入/过期清理/计数）。

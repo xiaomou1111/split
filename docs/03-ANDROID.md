@@ -114,6 +114,8 @@ boot → post-fs-data(挂 bpffs) → late_start service.sh
     5) splitd -c $CFG -d      # daemon 加载 bpf、attach、灌 CNIP
     6) 检查 `splitctl status` → OK
     7) (v1.1.7) 拉起 `scripts/split-watchdog.sh` 守护 splitd（doze/LMK 杀掉后自动重启）
+    8) (v1.2.9) watchdog 另守 mihomo TUN：探活到 map_tun=0（mihomo TUN 消失）时经 mihomo
+       API 无感恢复，API 失败则重启 mihomo——"splitd 活着但代理静默放行"也能自愈
 ```
 
 `android/magisk/` 里已放好 `module.prop、customize.sh、service.sh、post-fs-data.sh、

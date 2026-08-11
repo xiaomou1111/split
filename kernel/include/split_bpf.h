@@ -45,7 +45,9 @@ struct split_pkt {
 /* ---- 运行时配置（map_cfg value） ---- */
 struct split_cfg {
     __u8  default_verdict;  /* split_verdict，默认 TUN */
-    __u8  bpf_trace_enabled;
+    __u8  bpf_trace_enabled;/* v1.3.1 起兼作"已初始化"哨兵：loader map_set_cfg 置 1；
+                             * 0 = map_cfg 尚未写入（ARRAY map lookup 永不 NULL，未写入
+                             * 返回全零元素）→ policy.h 回落 TUN 安全默认（勿依赖 0 语义） */
     __u8  ipv6_classify;    /* 0/1 */
     __u8  skip_uid_enabled; /* map_skip_uid 非空=1（热路径：空则跳过 get_socket_uid+查表） */
     __u8  dom_enabled;      /* map_dom_* 任一非空=1（热路径：空则跳过域名整段） */
@@ -105,7 +107,7 @@ enum split_stats_key {
 
 #ifndef __KERNEL__
 /* 仅 userspace 使用的宏（编译 bpf 时不可见） */
-#define SPLIT_VERSION "1.2.7"
+#define SPLIT_VERSION "1.3.1"
 #define SPLIT_PIN_NS "/sys/fs/bpf/split"
 #define SPLIT_SOCKET "/run/splitd.sock"
 #define SPLIT_LOG "/var/log/splitd.log"
