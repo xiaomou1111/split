@@ -24,16 +24,19 @@
 6. **map 单一真相源在 maps.h**：改 map 类型/容量/大小必须同步 `userspace/loader/loader.c` 的 map 期望表与 docs/02 map 表。map 名称（`map_` 前缀）被用户态按名字查找，**改名即破坏契约**。
 7. **stats_inc 用 `key & (STAT_MAX - 1)` 防越界**：`STAT_MAX=16` 必须是 2 的幂。key 编号被 `daemon.c ctl_stats` 的名字数组引用，**不能重排/插入**（可追加）。`STAT_DIRECT_V6=9`（v6 且 `ipv6_classify=false` 的"配置性直连"，与 CNIP 直连 `STAT_DIRECT_CN=1` 分开计，见 policy.h 第 2 步；v1.4.0 随域名统计删除后自 11 重排为 9——**仅运行时统计 map，无持久 ABI，重排安全**）——**追加 key 必须同步 daemon.c names 数组**。
 8. **LPM_TRIE 语义**：radix.h 查询时 prefixlen 填 128/32（查最具体），内核自动最长前缀回溯；key 必须整体清零（`{ .prefixlen = 32 }` 其余零）。值统一 `__u8 =1`（成员标记，不承载意义）。
-9. **parse 边界**：VLAN 支持至双标签 QinQ（`VLAN_MAX_TAGS=2`，0x8100/0x88a8，常量上界 + 全展开保证 verifier 可证；此前单层扩展为双标签）；IPv6 扩展头链式解析（HOPOPTS/ROUTING/DSTOPTS 相同布局 `(hdrlen+1)*8`，FRAGMENT 固定 8 字节）：无扩展头直取端口、单一 OPT* → L4、OPT*→FRAGMENT→L4 均可穿越；更深（OPT*→OPT*→L4、隧道/ESP/AH）不穿越，dport 留 0 仍 parse 成功；**fragment 头：取其 nexthdr，仅首片（offset=0）提取 dport，非首片无 L4 留 0**；非 TCP/UDP 时 `dport=0`。
-   - **v1.0.6：IPv6 无扩展头时也提取 dport**（此前只从扩展头分支取，普通 v6 TCP/UDP dport 恒 0——
-     与 IPv4 分支契约不一致的潜伏 bug；当前 policy 不用 dport 故无实际影响，勿回退到旧版）。
-   - **IPv4 分片（v1.1.4 审查加固）**：非首片（offset≠0）无 L4 头，dport 留 0 直接返回
-     （与 IPv6 fragment 分支语义对齐）；此前会把分片数据偏移处误当 L4 头读（dport 当前
-     未被 policy 使用，无实际影响，属防御性对齐）。
-   - **IPv6 fragment offset 掩码必须 0xFFF8（v1.1.4 修正）**：IPv6 frag_off 布局是 offset 占
-     高 13 位（bits 3-15）、M 标志是 bit 0。旧 `& 0x1FFF`（IPv4 的 IP_OFFMASK）会把 M=1 的
-     首片（0x0001）漏判 dport，且 offset≥8192 的非首片（0x2000）误判为首片（越界检查兜底、
-     parse 失败放行，无丢包）。v1.1.4 起 v6 的 TCP/UDP 分头读取 dport（与 IPv4 分支一致）。
+9. **parse 边界（v1.4.0 起仅 L3）**：VLAN 支持至双标签 QinQ（`VLAN_MAX_TAGS=2`，0x8100/0x88a8，
+   常量上界 + 全展开保证 verifier 可证）；rawip 蜂窝无 L2 路径（见 20）。parse 只提取
+   `family + dst`（policy 判定的全部输入）；任何越界/未知返回 0（不可判，上层放行）。IPv4
+   ihl 校验保留：`ihl<20` 或 `off+ihl>data_end` → parse 失败直连（畸形头边界维持不变）。
+   - **L4 dport/proto 解析已随 v1.4.0 删除（性能审查 R1）**：policy 纯 L3/UID 判定，L4 解析
+     （IPv4 分片检查、IPv6 扩展头链 HOPOPTS/ROUTING/DSTOPTS/FRAGMENT、`split_ipv6_frag_l4`）
+     是无消费者的热路径死代码，已整段删除。`struct split_pkt` 的 proto/dport 字段保留
+     （ABI 稳定）但不再填充，勿假定含有效值。
+   - **历史（坑不复存在，勿回退旧解析）**：v1.0.6 曾修"IPv6 无扩展头时不提取 dport"、
+     v1.1.4 曾加固 IPv4 分片（非首片无 L4）与 IPv6 fragment 掩码（必须 0xFFF8）——均属当时
+     "防御性对齐"，policy 从未消费 dport。删除后边缘包（L4 越界/IPv4 非首片/深层扩展头）
+     从"parse 失败→直连"改为"按 L3 正常裁决"（两者都不丢包，L3 判定更正确）；
+     parse_err 计数相应下降。
 10. **split.bpf.c 的 tun 读取**：`tun_ifindex()` 每次取 map（数组槽 0），无 tun 时 `TC_ACT_OK` 并计 `STAT_MISS_TUN`——mihomo 未就绪时保联网。
 11. **cfg 未初始化的兜底（v1.3.1 修正契约）**：map_cfg 是 **ARRAY map，lookup 永不返回
     NULL**（未写入时返回全零元素，default_verdict=0=直连）——旧注释"map 未初始化时按默认

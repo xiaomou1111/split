@@ -12,7 +12,7 @@
  │  Linux 网络协议栈 (路由)        │
  │  ┌───────────────────────────┐ │
  │  │ TC-Egress: split.bpf.o    │ │ ← eBPF 在物理网卡发送侧挂载
- │  │  1. 解析报文 (L2/L3/L4)    │ │
+ │  │  1. 解析报文 (L2/L3)       │ │
  │  │  2. 策略判定               │ │
  │  │     · CNIP(中国) → 直连    │ │  ← LPM_TRIE 免于内存
  │  │     · fake-ip → 交代理      │ │
@@ -152,7 +152,7 @@ curl https://www.baidu.com       # 直连（不经过 mihomo）
 
 | 模块 | 位置 | 职责 |
 |------|------|------|
-| `parse` | kernel/bpf/parse.h | L2/L3/L4 解析、边界校验、vlan 处理 |
+| `parse` | kernel/bpf/parse.h | L2/L3 解析（v1.4.0 起仅 L3）、边界校验、vlan 处理 |
 | `radix` | kernel/bpf/radix.h | LPM_TRIE 最长前缀匹配封装 |
 | `policy` | kernel/bpf/policy.h | 分流裁决：直连 / 代理 / 默认 |
 | `classify` | kernel/bpf/split.bpf.c | tc 入口 + UID 白名单 + redirect |

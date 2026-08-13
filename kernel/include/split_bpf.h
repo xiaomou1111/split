@@ -31,11 +31,14 @@ struct lpm_key6 {
     __u8  addr[16];
 };
 
-/* ---- 解析后的报文元数据 ---- */
+/* ---- 解析后的报文元数据 ----
+ * v1.4.0（性能审查）：proto/dport 不再填充——policy 纯 L3/UID 判定，只消费 family+dst
+ * （L4 解析是无消费者的热路径死代码，已随 v1.4.0 从 parse.h 删除）。字段保留（ABI 稳定），
+ * 勿假定其含有效值。 */
 struct split_pkt {
     __u16 family;
-    __u8  proto;                  /* IPPROTO_TCP / IPPROTO_UDP / ... */
-    __be16 dport;
+    __u8  proto;                  /* 保留：不再填充（L4 解析已删） */
+    __be16 dport;                 /* 保留：不再填充（L4 解析已删） */
     union {
         __be32 ip4;
         __u8   ip6[16];

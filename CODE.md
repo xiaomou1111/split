@@ -75,7 +75,7 @@ split.bpf.c ──> parse.h（解析）──> policy.h（裁决）──> radix
 ### 2.3 parse.h — 安全解析
 
 - 原则：**任何越界 → 返回 0（不可判），由上层放行，绝不越界读**
-- 支持 IPv4/IPv6/VLAN(0x8100/0x88a8 单层)，TCP/UDP 端口
+- v1.4.0 起仅提取 L3（family+dst，policy 的全部输入）；VLAN 支持至双标签 QinQ；L4 解析已删（无消费者）
 - case 标签用 `bpf_htons(ETH_P_IP)`（网络序常量，勿用 htons 非常量）
 
 ### 2.4 radix.h — LPM 封装

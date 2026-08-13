@@ -35,19 +35,19 @@ L4 平台胶水     android/magisk
 - **测试**：`tests/unit/maps_test.c` 验证加载正确大小、类型、max_entries。
 
 ### 1.2 parse.h — 报文解析
-- **职责**：给定 `__sk_buff*`，安全读出 以太→IP→(TCP/UDP) 的 dst_ip、proto、dport、
-  family、以及 skb uid。
+- **职责**：给定 `__sk_buff*`，安全读出 L3 元数据 `family + dst`（policy 判定的全部输入）。
+  v1.4.0（性能审查 R1）起不再解析 L4（proto/dport 无消费者，热路径死代码已删）。
 - **对外契约**：
   ```c
   struct split_pkt {
       __u16 family;      /* SPLIT_FAMILY_IPV4 / IPV6 */
-      __u8  proto;       /* IPPROTO_* */
-      __be16 dport;
+      __u8  proto;       /* 保留：不再填充（L4 解析已删） */
+      __be16 dport;      /* 保留：不再填充（L4 解析已删） */
       union { __be32 ip4; __u8 ip6[16]; } dst;   /* 网络字节序 */
   };
   int parse_skb(struct __sk_buff *skb, struct split_pkt *p);  /* 1=成功 0=不可判(放行) */
   ```
-- **实现要点**：所有读写带 `if (data + N > data_end) return 0` 守卫；支持 vlan(0x8100/0x88a8) 跳过外层头。
+- **实现要点**：所有读写带 `if (data + N > data_end) return 0` 守卫；支持 vlan(0x8100/0x88a8) 至双标签 QinQ；rawip（蜂窝）无 L2 路径。
 - **测试**：BPF 单测用 `tests/bpf/`（patterns + verifier 判定）会构造最小以太网/IP 包。
 
 ### 1.3 radix.h — LPM_TRIE 匹配

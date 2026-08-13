@@ -37,7 +37,7 @@
 客户端 SYN → dst 172.217.* (Google, 非 CNIP)
   1. 内核路由: 默认路由 → wlan0  egress
   2. tc-egress filter 命中 split 程序:
-       parse:  以太网 MAC/IP/TCP 头部、四元组、uid
+       parse:  以太网/IP 头、L3 dst、uid
        policy:  非 CNIP、非直连白名单 → 代理
        skip:    uid 非 mihomo 自身
        exec:    bpf_redirect(tun0_ifindex, 0)  // 引导报文“从 tun0 发出”
