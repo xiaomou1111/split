@@ -5,11 +5,10 @@
  *   1. uid 白名单 → 直连（防代理自身回环）
  *   2. ipv6_classify=false 且 v6 → 直连（v6 不参与分类，docs/04 契约）
  *   3. 内置本地段（回环/链路本地/组播） → 直连
- *   4. 域名规则命中（DNS 学习 IP→域名 + 后缀规则） → 按规则（v1.1.0）
- *   5. proxy 规则段命中 → 代理（fake-ip 池等）
- *   6. direct 规则段命中 → 直连
- *   7. CNIP(4/6) 命中 → 直连
- *   8. 其余 → cfg.default_verdict
+ *   4. proxy 规则段命中 → 代理（fake-ip 池等）
+ *   5. direct 规则段命中 → 直连
+ *   6. CNIP(4/6) 命中 → 直连
+ *   7. 其余 → cfg.default_verdict
  */
 #ifndef __SPLIT_BPF_POLICY_H_
 #define __SPLIT_BPF_POLICY_H_
@@ -20,7 +19,6 @@
 #include "split_bpf.h"
 #include "maps.h"
 #include "radix.h"
-#include "dom.h"
 
 /*
  * 用 bpf_ntohl 把地址转成与"主机字节序"无关的"数值"：
@@ -104,8 +102,8 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
     }
 
     /* 2. ipv6_classify=false：v6 不参与任何分类，一律直连（docs/04 契约）。
-     * 必须置于域名/规则/CNIP 之前——否则 proxy6/direct6 规则仍会命中，与
-     * "v6 一律直连"语义相悖。统计记 STAT_DIRECT_V6（"配置性直连"，与第 7 步
+     * 必须置于规则/CNIP 之前——否则 proxy6/direct6 规则仍会命中，与
+     * "v6 一律直连"语义相悖。统计记 STAT_DIRECT_V6（"配置性直连"，与第 6 步
      * 的 CNIP 直连 STAT_DIRECT_CN 区分开，观测语义更准）。 */
     if (pkt->family == SPLIT_FAMILY_IPV6 && !cfg->ipv6_classify) {
         stats_inc(STAT_DIRECT_V6);
@@ -118,30 +116,7 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         return SPLIT_VERDICT_PASS;
     }
 
-    /* 4. 域名规则（v1.1.0，优先级高于 IP 段规则）
-     * 连接 dst IP 先反查学习表（用户态 AF_PACKET 抓 DNS 响应写入），
-     * 命中后做后缀匹配；未学到域名 / 无规则 → 静默落入下一步。
-     * v1.2.0：cfg.dom_enabled==0（无双侧域名规则）时整段短路——省下
-     * map_dns4/6 的 HASH 查表 + bpf_ktime_get_boot_ns() 两次 helper/查顶，这是
-     * 未配置域名分流场景下的热路径最大收益。 */
-    if (cfg->dom_enabled) {
-        const struct dns_entry *de = dns_lookup_entry(pkt);
-
-        if (de) {
-            struct dom_key k = {};
-
-            if (dom_match_proxy(de, &k)) {
-                stats_inc(STAT_DOM_PROXY);
-                return SPLIT_VERDICT_TUN;
-            }
-            if (dom_match_direct(de, &k)) {
-                stats_inc(STAT_DOM_DIRECT);
-                return SPLIT_VERDICT_PASS;
-            }
-        }
-    }
-
-    /* 5. 强制代理规则（fake-ip 池等，优先级高于 CNIP） */
+    /* 4. 强制代理规则（fake-ip 池等，优先级高于 CNIP） */
     if (pkt->family == SPLIT_FAMILY_IPV4) {
         if (radix_match4(&map_rule_proxy4, pkt->dst.ip4)) {
             stats_inc(STAT_PROXY);
@@ -154,7 +129,7 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         }
     }
 
-    /* 6. 强制直连规则（内网/vpn/自有服务） */
+    /* 5. 强制直连规则（内网/vpn/自有服务） */
     if (pkt->family == SPLIT_FAMILY_IPV4) {
         if (radix_match4(&map_rule_direct4, pkt->dst.ip4)) {
             stats_inc(STAT_DIRECT_RULE);
@@ -167,7 +142,7 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         }
     }
 
-    /* 7. CNIP（中国段 → 直连）—— 核心内核分流 */
+    /* 6. CNIP（中国段 → 直连）—— 核心内核分流 */
     if (pkt->family == SPLIT_FAMILY_IPV4) {
         if (radix_match4(&map_cnip4, pkt->dst.ip4)) {
             stats_inc(STAT_DIRECT_CN);
@@ -180,7 +155,7 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         }
     }
 
-    /* 8. 默认行为 */
+    /* 7. 默认行为 */
     if (cfg->default_verdict == SPLIT_VERDICT_TUN)
         stats_inc(STAT_PROXY);
     else

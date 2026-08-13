@@ -27,9 +27,6 @@ struct split_bpf_ctx {
     struct bpf_map *m_cnip4, *m_cnip6;
     struct bpf_map *m_proxy4, *m_proxy6, *m_direct4, *m_direct6;
     struct bpf_map *m_skip_uid, *m_tun, *m_cfg, *m_stats;
-    /* v1.1.0 域名分流 */
-    struct bpf_map *m_dns4, *m_dns6;
-    struct bpf_map *m_dom_proxy, *m_dom_direct;
     /* v1.1.5 RAWIP 接口集合（无以太网头的接口，如 Android 蜂窝 rmnet_data*） */
     struct bpf_map *m_rawip;
     int  attached[IFACE_MAX];   /* 已挂载的 ifindex */
@@ -59,7 +56,7 @@ int map_rawip_sync(struct split_bpf_ctx *ctx, int ifindex,
 int map_set_tun(struct split_bpf_ctx *ctx, int ifindex);
 int map_get_tun(struct split_bpf_ctx *ctx, uint32_t *ifindex);
 int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on,
-                bool skip_uid_on, bool dom_on);
+                bool skip_uid_on);
 int map_skip_uid_add(struct split_bpf_ctx *ctx, uint32_t uid);
 int map_skip_uid_del(struct split_bpf_ctx *ctx, uint32_t uid);
 /* cidr: "A.B.C.D/N" 或 "xxxx:xxxx::/N"，写入 rule map（which=RULE_PROXY/DIRECT） */
@@ -89,24 +86,5 @@ int map_cnip_clear_all(struct split_bpf_ctx *ctx);
 
 /* 统计 CNIP map 当前条目数（status 自检用；0 条 = 文件缺失/未导入） */
 int map_cnip_count(struct split_bpf_ctx *ctx, uint32_t *n4, uint32_t *n6);
-
-/* ---- v1.1.0 域名分流 ---- */
-
-/* 域名规则（which=RULE_PROXY/DIRECT）：domain 支持 "*.example.com" 前缀通配
- * （去通配按 example.com 存）。内部转小写 + 反转后写入 LPM_TRIE。
- * 非法/超长（>SPLIT_DOM_MAX 字节）→ -1。 */
-int map_dom_add(struct split_bpf_ctx *ctx, const char *domain, int which);
-int map_dom_del(struct split_bpf_ctx *ctx, const char *domain, int which);
-/* 清空两个域名规则 map（reload 幂等） */
-int map_dom_clear(struct split_bpf_ctx *ctx);
-
-/* DNS 学习写入：ip 为 4/16 字节网络序；name_rev 为反转+小写域名；
- * expire_ns 用 CLOCK_BOOTTIME（与内核 bpf_ktime_get_boot_ns 同源）。 */
-int map_dns_set(struct split_bpf_ctx *ctx, int family, const void *ip,
-                const char *name_rev, int len, uint64_t expire_ns);
-/* 删除过期条目（now_ns 同源单调时钟）；返回删除条数 */
-int map_dns_prune(struct split_bpf_ctx *ctx, uint64_t now_ns);
-/* 统计当前学习条目数（ctl `dns` 命令用） */
-int map_dns_count(struct split_bpf_ctx *ctx, uint32_t *n4, uint32_t *n6);
 
 #endif

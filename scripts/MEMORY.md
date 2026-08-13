@@ -15,11 +15,11 @@
 - v1.1.0：开头加交叉工具链检查（aarch64-linux-gnu-gcc / aarch64-linux-gnu-ar 缺失即报错退出，
   提示 make prepare）；结果展示的 `file` 命令做存在性容错。
 - 依赖：aarch64-linux-gnu-gcc + libbpf 源码 + libelf/libz/libzstd/llzma/libbz2 的 arm64 dev 包。
-- **坑（v1.2.0，已随 v1.2.7 消除）**：`-I$LIBBPF/include` 会把 libbpf 源码树自带的内部
+- **坑（v1.2.0，已消除）**：`-I$LIBBPF/include` 会把 libbpf 源码树自带的内部
   `include/linux/filter.h` 遮蔽系统 `/usr/include/linux/filter.h`，曾致 `dns/dns.c` 交叉编译
   报错（缺 cBPF 的 struct sock_filter/BPF_STMT）。修复当时在 `dns/dns.c` 用 `#ifndef BPF_STMT`
-  守卫补 cBPF 定义；**v1.2.7 移除 dns 学习器 cBPF filter 后该坑不再存在**（勿回退，见
-  userspace/dns/MEMORY.md 第 11 条）。
+  守卫补 cBPF 定义；**v1.2.7 移除 dns 学习器 cBPF filter、v1.4.0 整模块移除后该坑不复存在**
+  （勿回退——`userspace/dns/` 已删除，引回该模块即重新引入此坑）。
 
 ## load-debug.sh
 - 宿主机（Linux）调试加载：先挂 clsact 再 attach 到主出口网卡（一般 `lo` 或主网卡），用于无 daemon 时快速验证。

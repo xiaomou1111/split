@@ -1,6 +1,6 @@
 ﻿# eBPF-Split 使用说明书
 
-> 版本 v1.3.1 ｜ 面向：想在 Linux / Android 真机上用起来的人
+> 版本 v1.4.0 ｜ 面向：想在 Linux / Android 真机上用起来的人
 > 目标读者：能看懂 shell 命令、会 root 的普通用户。代码细节见 `docs/`。
 
 ---
@@ -199,25 +199,16 @@ cnip:
   auto_update_hours: 72
 ```
 
-**判定顺序（policy.h 即真相，v1.1.1 起 8 步；第 2 步是 `default.ipv6: false` 时的 v6 出口）**：
+**判定顺序（policy.h 即真相，7 步；第 2 步是 `default.ipv6: false` 时的 v6 出口）**：
 ```
 1. skip_uid 白名单        → 直连
 2. v6 且 ipv6:false       → 直连（v6 不参与分类，docs/04 契约）
 3. 内置本地段(回环/链路/组播) → 直连
-4. 域名规则（DNS 学习）     → 按 proxy_domains/direct_domains（v1.1.0）
-5. proxy 规则段            → 代理
-6. direct 规则段           → 直连
-7. CNIP(4/6)              → 直连
-8. 其余                    → default.verdict
+4. proxy 规则段            → 代理
+5. direct 规则段           → 直连
+6. CNIP(4/6)              → 直连
+7. 其余                    → default.verdict
 ```
-
-**域名分流（v1.1.0）**：splitd 用 AF_PACKET 抓取 UDP/53 的 DNS 响应，
-解析 A/AAAA 记录把 `IP→域名` 学进内核 map（TTL 过期自动失效）；内核 egress
-对连接目标 IP 反查域名，再对 `rules: proxy_domains:/direct_domains:` 做后缀
-匹配（Clash DOMAIN-SUFFIX 语义，支持 `*.` 通配）。未学到域名的连接回落
-IP 判定，**绝不丢包**。`splitctl dns` 查看学习器状态（learned/entries）。
-限制：只学 IPv4 传输的 DNS 响应；TCP/53 与 IP 分片不学习（已知缺口）；
-CNAME 链中每条 A/AAAA 按**自身 owner name** 学习（v1.2.7）。
 
 > **rules 空列表告警（v1.2.9）**：声明了 `proxy_cidr4/direct_cidr4/proxy_cidr6/direct_cidr6`
 > 但没有任何 `- item` 时，默认规则（fake-ip 段/内网直连段）会被覆盖式清空——启动/reload
@@ -232,7 +223,6 @@ splitctl start [-c cfg] [-s path] [-b bpfobj] [-d]    # 启动 splitd（-s=split
 splitctl stop                        # 停止
 splitctl status                      # 状态（prog_fd/attached/tun/cnip4/cnip6/hijack + WARN 行）
 splitctl stats                       # 内核计数
-splitctl dns                         # 域名学习器状态（v1.1.0）
 splitctl list-rules                  # 当前在线规则（proxy/direct 行，v1.2.2）
 splitctl reload                      # 重载配置（增量写 map）
 splitctl reload-cnip                 # 只刷新 CNIP
@@ -269,8 +259,6 @@ splitctl validate -c cfg             # 只校验配置
 | redirect_err | 重定向失败 | 恒 0 为佳 |
 | dropped | 丢包（不应发生） | 恒 0 |
 | miss_tun | 想代理但 tun 未就绪（放行） | 启动初期可出现；**持续增长 = mihomo TUN 消失（v1.2.9 watchdog 自愈，见 Q8）** |
-| dom_proxy | 域名规则命中→代理（v1.1.0） | 访问规则域名后 +1 |
-| dom_direct | 域名规则命中→直连（v1.1.0） | 访问规则域名后 +1 |
 
 ---
 

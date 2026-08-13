@@ -23,10 +23,10 @@ const STAT_LABELS = {
   total: '总包数', direct_cn: '直连·CN', direct_rule: '直连·规则',
   proxy: '代理', skip_uid: '白名单', parse_err: '解析错误',
   redirect_err: '重定向错误', dropped: '丢弃', miss_tun: 'TUN缺失',
-  dom_proxy: '域名代理', dom_direct: '域名直连', direct_v6: '直连·v6',
+  direct_v6: '直连·v6',
 };
 /* 增长即"流量在走"的计数（绿色）；异常计数（红色，正常应为 0） */
-const STAT_GROW_OK = new Set(['direct_cn', 'direct_rule', 'proxy', 'dom_proxy', 'dom_direct', 'direct_v6']);
+const STAT_GROW_OK = new Set(['direct_cn', 'direct_rule', 'proxy', 'direct_v6']);
 const STAT_DANGER = new Set(['parse_err', 'redirect_err', 'dropped', 'miss_tun']);
 
 /* ---------- 工具 ---------- */
@@ -149,21 +149,6 @@ async function loadMihomo() {
   $('mh-log').textContent = m.log || '—';
 }
 
-/* ---------- DNS 学习器 ---------- */
-async function loadDns() {
-  const r = await callApi('dns');
-  const body = r.err ? '' : r.text;
-  const fd = (body.match(/fd=(-?\d+)/) || [])[1];
-  const learned = (body.match(/learned=(\d+)/) || [])[1];
-  const skipped = (body.match(/skipped=(\d+)/) || [])[1];
-  const e4 = (body.match(/entries4=(\d+)/) || [])[1];
-  const e6 = (body.match(/entries6=(\d+)/) || [])[1];
-  $('dns-fd').textContent = fd || '—';
-  $('dns-learned').textContent = learned || '—';
-  $('dns-skipped').textContent = skipped || '—';
-  $('dns-entries').textContent = (e4 === undefined || e6 === undefined) ? '—' : `${e4}/${e6}`;
-}
-
 /* ---------- 内核计数（含增量速率） ---------- */
 let statPrev = {};      // 上一轮各计数（增量速率基准）
 let statPrevAt = 0;     // 上一轮拉取时刻（performance.now）
@@ -229,10 +214,10 @@ async function loadLog() {
 let statTimer = 0, logTimer = 0;
 function startPolling() {
   if (statTimer) return;
-  // 状态/统计/mihomo/dns/env 每 5 秒刷新；仅在状态面板激活时轮询
+  // 状态/统计/mihomo/env 每 5 秒刷新；仅在状态面板激活时轮询
   statTimer = setInterval(() => {
     if (document.getElementById('panel-status').classList.contains('active')) {
-      Promise.all([loadStatus(), loadStats(), loadMihomo(), loadDns(), loadEnv()]);
+      Promise.all([loadStatus(), loadStats(), loadMihomo(), loadEnv()]);
     }
   }, 5000);
 }
@@ -373,7 +358,6 @@ function summarizeConfig(text) {
   rows.push(['强制直连 CIDR', `${n('rules.direct_cidr4')}+${n('rules.direct_cidr6')}`]);
   const uids = lists['rules.skip_uid'] || [];
   rows.push(['skip_uid', uids.length ? uids.join(' ') : '—']);
-  rows.push(['域名规则', `代理 ${n('rules.proxy_domains')} · 直连 ${n('rules.direct_domains')}`]);
   rows.push(['CNIP v4', pathBase(flat['cnip.path_v4']) || '未配置']);
   rows.push(['CNIP v6', pathBase(flat['cnip.path_v6']) || '未配置']);
   const upd = flat['cnip.auto_update_hours'];
@@ -450,7 +434,7 @@ function bindTabs() {
 
 /* 状态面板全量刷新（含手动"刷新"按钮与开关操作后） */
 function refreshStatusPanel() {
-  return Promise.all([loadStatus(), loadStats(), loadMihomo(), loadDns(), loadEnv()]);
+  return Promise.all([loadStatus(), loadStats(), loadMihomo(), loadEnv()]);
 }
 
 function bindActions() {

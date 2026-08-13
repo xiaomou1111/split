@@ -1,6 +1,6 @@
 # 代码说明书（CODE.md）
 
-> eBPF-Split v1.3.1 ｜ 面向：想读懂/改这份代码的开发者
+> eBPF-Split v1.4.0 ｜ 面向：想读懂/改这份代码的开发者
 > 先读：`README.md`（架构总览）→ 本文（代码细节）→ 各模块 `MEMORY.md`（改前必读）
 
 ---
@@ -16,15 +16,13 @@ split/
 │       ├── maps.h           全部 BPF map（单一真相源）
 │       ├── parse.h          报文解析（安全边界）
 │       ├── radix.h          LPM_TRIE 匹配封装
-│       ├── dom.h            域名匹配（v1.1.0：反转 LPM + 后缀回溯）
-│       └── policy.h         判定顺序（8 步，含 v6 开关）
+│       └── policy.h         判定顺序（7 步，含 v6 开关）
 │
 ├── userspace/               # 用户态（libbpf 驱动）
 │   ├── common/              log / config(极简YAML) / netlink / paths
 │   ├── loader/              BPF 加载 + tc 挂载 + map 操作
 │   ├── cni/                 CNIP 数据灌入
-│   ├── rule/                规则管理（CIDR + 域名）
-│   ├── dns/                 DNS 学习器（v1.1.0：AF_PACKET 抓响应 → IP→域名）
+│   ├── rule/                规则管理（CIDR）
 │   ├── daemon/              splitd 守护（生命周期 / ctl 协议）
 │   └── cli/                 splitctl 命令
 └── scripts/                 # 构建 / 打包 / 工具
@@ -33,7 +31,6 @@ split/
 **调用链（内核侧）**：
 ```
 split.bpf.c ──> parse.h（解析）──> policy.h（裁决）──> radix.h（LPM）
-                    └──────────────────────────────> dom.h（域名，v1.1.0）
                     └──────────> maps.h（map 定义/统计）
 ```
 
@@ -49,7 +46,7 @@ split.bpf.c ──> parse.h（解析）──> policy.h（裁决）──> radix
 1. stats_inc(STAT_TOTAL)             # 计数
 2. parse_skb(skb, &pkt)              # 解析，失败→TC_ACT_OK 放行
 3. uid = bpf_get_socket_uid(skb)     # 安卓每 app 一 uid
-4. verdict = policy_judge(...)       # 8 步裁决
+4. verdict = policy_judge(...)       # 7 步裁决
 5. 若 TUN → tun_ifindex() 检查 → bpf_redirect(tun, 0)
 6. 直连 → TC_ACT_OK
 ```
@@ -67,16 +64,13 @@ split.bpf.c ──> parse.h（解析）──> policy.h（裁决）──> radix
 | map_cnip6 | LPM_TRIE | lpm_key6 | 65536 | CNIP IPv6 |
 | map_rule_proxy4/6 | LPM_TRIE | lpm_key4/6 | 8192 | 强制代理段 |
 | map_rule_direct4/6 | LPM_TRIE | lpm_key4/6 | 8192 | 强制直连段 |
-| map_dns4/6（v1.1.0） | HASH | u32 / u8[16] | 4096 | IP→域名（学习器写入，TTL 过期） |
-| map_dom_proxy/direct（v1.1.0） | LPM_TRIE | dom_key | 8192 | 域名后缀规则（反转存储，value=dom_rule.len） |
-| map_rawip（v1.1.5） | HASH | u32 ifindex | 128 | RAWIP 接口集合（蜂窝 rmnet_data*，ARPHRD_RAWIP=519，无 L2 头，内核据此跳过以太网解析） |
+| map_rawip（v1.1.5） | HASH | u32 ifindex | 32 | RAWIP 接口集合（蜂窝 rmnet_data*，ARPHRD_RAWIP=519，无 L2 头，内核据此跳过以太网解析） |
 | map_skip_uid | HASH | u32 | 64 | UID 白名单（防回环） |
 | map_tun | ARRAY | u32 | 1 | tun ifindex |
 | map_cfg | ARRAY | u32 | 1 | split_cfg 运行时配置 |
 | map_stats | PERCPU_ARRAY | u32 | STAT_MAX | 统计计数 |
 
 > 改名/改结构 = 破坏 ABI：用户态 loader.c 按名字 `bpf_object__find_map_by_name` 查找。
-> 域名编码契约（反转+小写）见 `split_bpf.h`「域名分流」节 / `dom.h`。
 
 ### 2.3 parse.h — 安全解析
 
@@ -92,35 +86,18 @@ radix_match6(&map_cnip6, ip6_ptr)
 ```
 查询 key 的 prefixlen 填 32/128（查最具体），值统一 `__u8=1`（成员标记）。
 
-### 2.5 policy.h — 判定顺序（8 步，含 v6 开关出口）
+### 2.5 policy.h — 判定顺序（7 步，含 v6 开关出口）
 
 ```
 1. skip_uid 白名单      → PASS
 2. v6 且 ipv6_classify=0 → PASS（v6 不参与任何分类，docs/04 契约）
 3. 内置本地段           → PASS（127/8,169.254/16,224/4,255.255.255.255,::1,fe80::/10,ff00::/8）
-4. 域名规则（v1.1.0）   → 查 map_dns4/6（IP→域名）→ map_dom_proxy/direct 后缀匹配
-5. proxy 规则段         → TUN
-6. direct 规则段        → PASS
-7. CNIP(4/6)           → PASS
-8. 其余                → cfg->default_verdict（默认 TUN）
+4. proxy 规则段         → TUN
+5. direct 规则段        → PASS
+6. CNIP(4/6)           → PASS
+7. 其余                → cfg->default_verdict（默认 TUN）
 ```
 内置段用 `bpf_ntohl` 转主机序比较（跨 CPU endian 一致）。
-
-### 2.6 dom.h — 域名匹配（v1.1.0）
-
-```
-dns_lookup_entry(pkt)   # map_dns4/6 反查 dst IP → dns_entry（过期跳过）
-  └─ dom_match_proxy/direct(de, key)
-       # key.data 全量拷贝反转域名（memcpy 64B）→ 逐字节递减 prefixlen 查询：
-       #   prefixlen = remain*8 → lookup(map_dom_*)（miss 即返回 0，v1.1.2）
-       #         命中: len==remain 或 data[len]=='.'（标签边界）→ 命中
-       #         否则 remain-- 继续（≤64 步线性，v1.1.1 起无层数限制）
-```
-- 规则编码：反转+小写（"example.com" → "moc.elpmaxe"），后缀匹配 = LPM 前缀匹配。
-- value `dom_rule.len` 自记长度：LPM lookup 不返回命中前缀长度，边界检查需要它。
-- 遮蔽处理：`xample.com` 会遮蔽 `com` 命中 `example.com`——边界检查失败后逐字节递减
-  prefixlen 再查（旧"找最后一个 '.' 跳标签"方案在 `-mcpu=v1` 下 verifier 状态爆炸，
-  v1.1.1 废弃，详见 kernel/bpf/MEMORY.md 第 19 条）。
 
 ---
 
@@ -130,21 +107,20 @@ dns_lookup_entry(pkt)   # map_dns4/6 反查 dst IP → dns_entry（过期跳过�
 
 ```
 config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
-→ rule_apply_all → cnip_apply → iface_reconcile → dns_learn_open → ctl_listen → 事件循环
+→ rule_apply_all → cnip_apply → iface_reconcile → ctl_listen → 事件循环
 ```
 
 ### 3.2 模块职责
 
 | 文件 | 职责 | 关键函数 |
 |---|---|---|
-| loader/loader.c | BPF 加载 + map 句柄 | split_load / split_attach_iface / map_set_tun / map_rule_add_cidr / map_dom_add / map_dns_set |
+| loader/loader.c | BPF 加载 + map 句柄 | split_load / split_attach_iface / map_set_tun / map_rule_add_cidr |
 | loader/iface.c | 挂载计划/网络切换 | iface_plan / iface_reconcile（v1.1.9 起支持快照复用，去重复 scan） |
 | common/netlink.c | 接口发现（纯 netlink） | iface_scan / iface_is_physical |
 | common/config.c | 极简 YAML 子集解析 | config_load / parse_bool |
 | common/paths.c | 运行时路径 | split_socket_path（$SPLIT_SOCKET） |
 | cni/cnip.c | CNIP 灌入 | cnip_apply / cnip_load_file |
-| rule/rule.c | 规则管理（CIDR + 域名） | rule_apply_all / rule_add / rule_del |
-| dns/dns.c（v1.1.0） | DNS 学习器（AF_PACKET） | dns_learn_open / dns_learn_poll |
+| rule/rule.c | 规则管理（CIDR） | rule_apply_all / rule_add / rule_del |
 | daemon/daemon.c | 生命周期 + ctl 协议 | daemon_loop / ctl_serve |
 | cli/splitctl.c | 命令行 | 见下 |
 
@@ -152,7 +128,7 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 
 - Unix socket（`split_socket_path()`，默认 /run/splitd.sock）
 - **单命令一连接**：回复后 return 0 即 close（防死锁，勿改多命令循环）
-- 命令：`stats`/`status`/`dns`（v1.1.0）/`list-rules`（v1.2.2）/`reload-cnip`/`reload`/`add-rule <cidr> [proxy|direct]`/`del-rule <cidr> [proxy|direct]`/`stop`
+- 命令：`stats`/`status`/`list-rules`（v1.2.2）/`reload-cnip`/`reload`/`add-rule <cidr> [proxy|direct]`/`del-rule <cidr> [proxy|direct]`/`stop`
 - 回复：首行 `OK/ERR`，数据行，末行 `END`
 - **`status`（v1.1.3 扩展）**：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>`；
   其后可能跟 `WARN ...` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管）——WebUI app.js 解析这些字段，改格式必须同步
@@ -172,8 +148,6 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 | mihomo auto-route 接管路由 → 分流静默失效 | daemon 每 10s 检测路由接管（status hijack 字段）+ service.sh/WebUI 启动前 fix-mihomo-tun.sh 幂等修复 |
 | CNIP 文件缺失 → direct_cn 恒 0 无报错 | status 报 cnip4/6 条数（0=缺失）+ 配 url 时启动自动补拉一次 |
 | mihomo gso 不兼容 | 保持 gso:false + stack:gvisor |
-| 域名规则遮蔽（`xample.com` 挡 `com`） | dom.h 边界检查 + 标签回溯（v1.1.0） |
-| 域名/LPM 时钟不同源 | expire 一律 CLOCK_BOOTTIME 纳秒（v1.1.0；v1.1.9 由 MONOTONIC 改 BOOTTIME，熄屏/doze 也推进） |
 
 ---
 

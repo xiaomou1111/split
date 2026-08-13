@@ -45,22 +45,6 @@ rules:
     - 0
     - 2000
 
-  # ---- 域名规则（v1.1.0，优先级高于 IP 段规则与 CNIP）----
-  # 原理：splitd 用 AF_PACKET 抓 DNS 响应（UDP/53）学习 IP→域名，
-  # 内核 egress 对连接目标 IP 反查域名后做后缀匹配（Clash DOMAIN-SUFFIX 语义）。
-  # 用法：域名为完整后缀，支持 *. 通配（等价去掉通配）与 FQDN 尾点。
-  # 典型场景：强推代理的域名（即使 CDN 解析到国内 IP 也走代理）；
-  #          强推直连的域名（内网设备名、机场反代等）。
-  # 注意：仅当"域名已被 DNS 学习到"时规则才生效——首次解析后才有映射，
-  # 且 TTL 过期会重新学习；超大列表（>64 条）请用 proxy_cidr4/direct_cidr4 或交给 mihomo 规则。
-  proxy_domains:
-    # - "*.github.com"
-    # - "*.google.com"
-    # - "*.steampowered.com"
-  direct_domains:
-    # - "*.lan"
-    # - "*.internal.example.com"
-
 # ---- CNIP 数据源（二选一即可；都留空则纯规则分流）----
 # 注意：建议用绝对路径（避免 splitd 工作目录歧义）。
 # Android 上可直接复用 box 模块的 cn.zone：cp /data/adb/box/run/cn.zone config/cn_cidr_v4.txt

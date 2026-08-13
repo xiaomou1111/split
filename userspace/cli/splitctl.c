@@ -220,7 +220,6 @@ static void usage(const char *prog)
         "  stop                        停止（经 daemon）\n"
         "  status                      状态\n"
         "  stats                       内核计数\n"
-        "  dns                         域名学习器状态（v1.1.0）\n"
         "  list-rules                  当前在线规则（proxy/direct，v1.2.2）\n"
         "  reload                      重读配置并应用\n"
         "  reload-cnip                 只刷新 CNIP\n"
@@ -281,8 +280,6 @@ int main(int argc, char **argv)
         return send_cmd("status");
     if (strcmp(argv[optind], "stats") == 0)
         return send_cmd("stats");
-    if (strcmp(argv[optind], "dns") == 0)
-        return send_cmd("dns");
     if (strcmp(argv[optind], "list-rules") == 0)
         return send_cmd("list-rules");
     if (strcmp(argv[optind], "reload") == 0)

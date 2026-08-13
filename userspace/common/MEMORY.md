@@ -12,9 +12,9 @@
 - 支持语法仅：`#` 注释、`section:`、`key: value`、`- list-item`。**无缩进语义、无引号、无嵌套、无多行**。
 - section 有 `ifaces:` / `default:` / `rules:` / `cnip:`；顶部 `debug:` / `tun_device:` / `attach_auto:` 只在 `S_NONE` 段。
 - 坑 1（覆盖语义）：`proxy_cidr4:`、`direct_cidr4:`、`skip_uid:` 等**列表声明行会先清零默认计数**——声明某组即"="而非"+="。**v1.0.2 修复**：清零逻辑原先在 `handle_scalar`（只被 S_DEFAULT 调用，rules 段是死代码），现已移到 S_RULES 分支里（`cfg->nproxy4=0` 等）。
-- 坑 2：列表项必须先有声明行，`cur_list` 决定落入哪一组（**1..9 的魔法编号**，改映射必须同步。
-  v1.1.0 新增 8=proxy_domains、9=direct_domains，走 `add_dom` + `CFG_DOM_MAX=64` 上限，
-  **与 CIDR 列表的 `CFG_LIST_MAX=16` 是两套上限**——域名规则期望更多条）。
+- 坑 2：列表项必须先有声明行，`cur_list` 决定落入哪一组（**1..7 的魔法编号**：
+  attach/exclude/proxy4/proxy6/direct4/direct6/skip_uid，改映射必须同步。
+  v1.4.0 移除原 8=proxy_domains、9=direct_domains 两个域名列表）。
 - 坑 3：**值/列表项的尾空白已由 `str_trim_tail()` 统一清理**（v1.0.2 修复：此前 `fgets` 的 `\n` 残留导致 `tun_device` 变 `"tun0\n"`、`strcmp` 匹配失败，WSL2 实测发现）。
 - 坑 4（v1.0.2 真机修复）：**布尔字段必须用 `parse_bool()` 而非 `atoi()`**。配置写 `attach_auto: true`（YAML 布尔），`atoi("true")=0` 导致 attach_auto 恒为 0 → 真机 `attach_auto:true` 却挂 0 个接口。现支持 `true/false/yes/no/on/off/1/0`（`parse_bool`，大小写不敏感）。涉及 debug/attach_auto/ipv6。
   - **v1.1.9 加固**：`parse_bool` 先清首尾空白再比对（容忍 `"TRUE "` 尾空白），输入进 16B 栈缓冲防原串不可修改。
@@ -26,7 +26,7 @@
   `key: value` 形式，防静默误配。
    **v1.2.8（审查修复）：列表 key 的内联值同样静默丢失**（如 `proxy_cidr4: 1.2.3.0/24`——冒号后的
    值被当列表头吞掉、`cur_list` 置位，值不落入任何规则）。新增 `list_key_inline_warn`：列表声明
-   key（attach_list/exclude/各 *_cidr4|6/skip_uid/proxy_domains/direct_domains）冒号后非空即 WARN，
+   key（attach_list/exclude/各 *_cidr4|6/skip_uid）冒号后非空即 WARN，
    提示改为逐行 `- item`。防"以为加了一条规则实际没有"的静默误配。
 - 坑 7（v1.1.8）：**未知 key / 无冒号行打 WARN**——顶层（S_NONE）、各 section（ifaces/default/
   rules/cnip）里的未知 `key: value`，以及 S_NONE 下缺少 ':' 的行，一律 `LOG_WARNF`。此前静默
@@ -45,7 +45,7 @@
 - 坑 10（v1.2.0，真机排查）：**`is_section` 必须接受行尾 `\n` 作为合法终止符**——
   `fgets` 保留行尾 `\n`，标准 YAML 配置 `ifaces:\n` 的 `p[n+1]` 是 `\n` 而非 `\0`/空格/tab，
   旧判据（`=='\0'||==' '||=='\t'`）对该行返回 0 → **所有 section 全部识别失败**，全部回落到
-  S_NONE 被报"未知顶层配置 key"，`cnip:`/`rules:` 等段整段失效 → CNIP 0 条、规则/域名全不生效。
+  S_NONE 被报"未知顶层配置 key"，`cnip:`/`rules:` 等段整段失效 → CNIP 0 条、规则全不生效。
   （症状：splitd.log 每个合法 section 都 `config_load:227 未知顶层配置 key`；config_dump 显示
   `cnip4=(未配置)`。可能 v1.1.5 收紧 is_section 判据时漏了 `\n`。）**修复：`p[n+1]` 增加
   `=='\n'` 分支。** `section_inline_warn` 本就排除 `\n`，无连带误报。

@@ -120,15 +120,6 @@ static int is_section(const char *p, const char *name)
            p[n + 1] == '\t';
 }
 
-/* 域名规则列表独立于 CIDR 列表（上限 CFG_DOM_MAX） */
-static void add_dom(char list[][CFG_STRLEN], int *n, const char *v)
-{
-    if (*n >= CFG_DOM_MAX)
-        return;
-    snprintf(list[*n], CFG_STRLEN, "%s", v);
-    (*n)++;
-}
-
 static void add_str(char list[][CFG_STRLEN], int *n, const char *v)
 {
     if (*n >= CFG_LIST_MAX)
@@ -169,7 +160,7 @@ int config_load(const char *path, struct split_config *cfg)
     FILE *fp;
     char line[512];
     int section = S_NONE;
-    char cur_list = 0; /* 0:无 1:attach 2:exclude 3:proxy4 ... 9:dom_direct */
+    char cur_list = 0; /* 0:无 1:attach 2:exclude 3:proxy4 4:proxy6 5:direct4 6:direct6 7:skip_uid */
     /* v1.2.9：rules 节列表声明标志——列表 key 是"覆盖式"（声明即清零默认计数），
      * 若声明了却没有任何 "- item"（空列表/仅注释），默认规则会被静默清空
      * （如默认 fake-ip 段 198.18.0.0/15），解析结束时据此告警。 */
@@ -269,8 +260,6 @@ int config_load(const char *path, struct split_config *cfg)
                     LOG_WARNF("skip_uid 非法值: %s（已忽略）", item);
                 break;
             }
-            case 8: add_dom(cfg->dom_proxy,  &cfg->ndom_proxy,  item); break;
-            case 9: add_dom(cfg->dom_direct, &cfg->ndom_direct, item); break;
             default: break;
             }
             continue;
@@ -303,8 +292,6 @@ int config_load(const char *path, struct split_config *cfg)
                 else if (strcmp(p, "direct_cidr4") == 0) { cfg->ndirect4 = 0; cur_list = 5; declared_direct4 = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "direct_cidr6") == 0) { cfg->ndirect6 = 0; cur_list = 6; declared_direct6 = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "skip_uid") == 0)     { cfg->nskip_uid = 0; cur_list = 7; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "proxy_domains") == 0)  { cfg->ndom_proxy  = 0; cur_list = 8; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "direct_domains") == 0) { cfg->ndom_direct = 0; cur_list = 9; list_key_inline_warn(p, v); }
                 /* v1.3.1（审查修复）：未知 key 不清 cur_list 会让其后的 "- item" 行
                  * 被并入上一个列表（静默误分流）。未知 key 一律复位当前列表。 */
                 else { LOG_WARNF("rules 下未知配置 key: %s", p); cur_list = 0; }
@@ -362,9 +349,8 @@ void config_dump(const struct split_config *cfg)
     LOG_INFOF("tun_device=%s attach_auto=%d", cfg->tun_device, cfg->attach_auto);
     LOG_INFOF("default_verdict=%s ipv6_classify=%d",
               cfg->default_verdict ? "tun" : "direct", cfg->ipv6_classify);
-    LOG_INFOF("skip_uid=%d proxy4=%d direct4=%d dom_proxy=%d dom_direct=%d cnip4=%s",
+    LOG_INFOF("skip_uid=%d proxy4=%d direct4=%d cnip4=%s",
               cfg->nskip_uid, cfg->nproxy4, cfg->ndirect4,
-              cfg->ndom_proxy, cfg->ndom_direct,
               cfg->cnip4_path[0] ? cfg->cnip4_path : "(未配置)");
     LOG_INFOF("cnip_auto_update_hours=%d url_v4=%s",
               cfg->cnip_auto_update_hours,

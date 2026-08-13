@@ -110,42 +110,6 @@ static __always_inline int rawip_lookup(__u32 ifindex)
     return v ? 1 : 0;
 }
 
-/* 5.5 域名分流（v1.1.0）
- *   map_dns4/6：IP → 域名（用户态 AF_PACKET 学习器写入，TTL 过期）
- *   map_dom_proxy/direct：域名后缀规则（反转存储，LPM 前缀匹配）
- * 字节序/编码契约见 split_bpf.h 域名分流一节。 */
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 4096);
-    __type(key, __u32);              /* IPv4 网络序（与 pkt.dst.ip4 字节级一致） */
-    __type(value, struct dns_entry);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-} map_dns4 SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 4096);
-    __type(key, __u8[16]);           /* IPv6 网络序 */
-    __type(value, struct dns_entry);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-} map_dns6 SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-    __uint(max_entries, 8192);
-    __type(key, struct dom_key);
-    __type(value, struct dom_rule);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-} map_dom_proxy SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-    __uint(max_entries, 8192);
-    __type(key, struct dom_key);
-    __type(value, struct dom_rule);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-} map_dom_direct SEC(".maps");
-
 /* 6. 观测：per-cpu 计数器 */
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);

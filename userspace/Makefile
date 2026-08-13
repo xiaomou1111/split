@@ -27,11 +27,10 @@ COMMON  := common/log.c common/config.c common/netlink.c common/paths.c
 LOADER  := loader/loader.c loader/iface.c
 CNI     := cni/cnip.c
 RULE    := rule/rule.c
-DNS     := dns/dns.c
 DAEMON  := daemon/daemon.c
 CLI     := cli/splitctl.c
 
-SRCS     := $(COMMON) $(LOADER) $(CNI) $(RULE) $(DNS)
+SRCS     := $(COMMON) $(LOADER) $(CNI) $(RULE)
 OBJS     := $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
 DAEMON_O  = $(OBJDIR)/$(DAEMON:.c=.o)
 CLI_O     = $(OBJDIR)/$(CLI:.c=.o)

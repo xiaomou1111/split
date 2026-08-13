@@ -36,7 +36,6 @@
 #include "../loader/iface.h"
 #include "../rule/rule.h"
 #include "../cni/cnip.h"
-#include "../dns/dns.h"
 
 /* v1.2.4：map_tun=0（utun 缺失）降级期间的心跳收紧间隔（毫秒）——
  * utun 重建回来后恢复代理的最长等待；正常状态心跳仍为 1s。 */
@@ -58,7 +57,7 @@ static int tun_sync(struct split_bpf_ctx *ctx, const struct split_config *cfg,
  *   B. 用户 `reload-cnip`：主线程同步灌入。
  * g_cnip_busy 在 fork 前置位、子进程回收后清位；reload-cnip 见位即拒绝，
  * 从而保证"任一时刻只有一个写入方在清空+写 CNIP map"。
- * 注意：`reload`（rule_apply_all）只碰 rule/dns map、不碰 CNIP map，
+ * 注意：`reload`（rule_apply_all）只碰 rule map、不碰 CNIP map，
  * 与子进程的 CNIP 灌入天然无交集——若未来给 reload 增加 CNIP 重灌，
  * 必须在此处同步加 g_cnip_busy 检查，否则破坏该不变式。 */
 static volatile sig_atomic_t g_cnip_busy = 0;
@@ -83,7 +82,7 @@ static void on_signal(int sig)
     g_stop = 1;
 }
 
-/* 启动时钟毫秒（用于 CNIP 定时刷新/DNS 清理，含 suspend、不受系统时间调整影响） */
+/* 启动时钟毫秒（用于 CNIP 定时刷新，含 suspend、不受系统时间调整影响） */
 static long long now_ms(void)
 {
     struct timespec ts;
@@ -212,7 +211,7 @@ static void ctl_stats(int c, struct split_bpf_ctx *ctx)
     static const char *names[] = {
         "total", "direct_cn", "direct_rule", "proxy",
         "skip_uid", "parse_err", "redirect_err", "dropped",
-        "miss_tun", "dom_proxy", "dom_direct", "direct_v6",
+        "miss_tun", "direct_v6",
     };
     uint64_t stats[STAT_MAX] = {0};
     int k;
@@ -223,23 +222,11 @@ static void ctl_stats(int c, struct split_bpf_ctx *ctx)
         return;
     }
     ctl_reply(c, "OK");
-    /* v1.1.9：以 names[] 元素数（此处 12=STAT_DIRECT_V6+1）为上界，与 STAT_MAX
-     * 取小——新增统计段时加 names 项即可自动扩展，避免硬编码 10 不同步。 */
+    /* v1.1.9：以 names[] 元素数（此处 10=STAT_DIRECT_V6+1）为上界，与 STAT_MAX
+     * 取小——新增统计段时加 names 项即可自动扩展，避免硬编码不同步。 */
     for (k = 0; k < STAT_MAX &&
                 k < (int)(sizeof(names) / sizeof(names[0])); k++)
         ctl_reply(c, "%s %llu", names[k], (unsigned long long)stats[k]);
-    ctl_reply(c, "END");
-}
-
-/* v1.1.0：DNS 学习器状态（真机排查"域名分流是否在学习"的关键命令） */
-static void ctl_dns(int c, struct split_bpf_ctx *ctx, struct dns_learn *dl)
-{
-    uint32_t n4 = 0, n6 = 0;
-
-    map_dns_count(ctx, &n4, &n6);
-    ctl_reply(c, "OK fd=%d learned=%llu skipped=%llu entries4=%u entries6=%u",
-              dl->fd, (unsigned long long)dl->learned,
-              (unsigned long long)dl->skipped, n4, n6);
     ctl_reply(c, "END");
 }
 
@@ -299,7 +286,6 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
                      const char *cfg_path,
                      struct split_config *cfg,
                      long long *cnip_next_ms,
-                     struct dns_learn *dl,
                      struct rule_overrides *rov,
                      int *tun_degraded,
                      int c)
@@ -380,8 +366,6 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
 
     if (cmd_is(cmd, "stats")) {
         ctl_stats(c, ctx);
-    } else if (cmd_is(cmd, "dns")) {
-        ctl_dns(c, ctx, dl);
     } else if (cmd_is(cmd, "status")) {
         ctl_status(c, ctx);
     } else if (cmd_is(cmd, "list-rules")) {
@@ -774,12 +758,10 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
 {
     struct split_config cfg;
     struct split_bpf_ctx ctx;
-    struct dns_learn dl;
     int tun_index, lfd = -1, evfd = -1, lock_fd = 0;
     long long cnip_next_ms = 0;
     long long tun_sync_last_ms = 0;
     long long reconcile_last_ms = 0;
-    long long dns_prune_last_ms = 0;
     long long hijack_last_ms = 0; /* 路由接管检测节流（10s） */
     int tun_degraded = 0; /* v1.2.4：map_tun=0（utun 缺失）降级中 → 心跳收紧到 300ms 快重试 */
     struct rule_overrides rov;   /* v1.2.0：运行时规则偏差（add-rule/del-rule，reload 后保留） */
@@ -872,10 +854,6 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
     /* 4. 挂载 */
     iface_reconcile(&ctx, &cfg, NULL);
 
-    /* 4.5 DNS 学习器（v1.1.0 域名分流）。
-     * 打开失败只 WARN 不退出：主分流（CNIP/规则）不受影响，仅域名功能不生效。 */
-    dns_learn_open(&dl, &ctx);
-
     /* 5. 控制/监听 */
     lfd = ctl_listen();
     evfd = iface_watch_open();
@@ -888,9 +866,9 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
     signal(SIGPIPE, SIG_IGN);
 
     while (!g_stop) {
-        struct pollfd fds[3];
+        struct pollfd fds[2];
         int nfds = 0, rc;
-        int lfd_idx = -1, evfd_idx = -1, dns_idx = -1;
+        int lfd_idx = -1, evfd_idx = -1;
 
         /* CNIP 定时自动更新（auto_update_hours，0=关闭；v1.1.3：cnip_boot_once
          * 时即使 hours=0 也补拉一次）。
@@ -910,13 +888,12 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 int r;
 
                 /* 子进程只做 CNIP 更新：关闭与更新无关的父进程 fd——
-                 * ctl listen / netlink watch / DNS AF_PACKET / 单实例锁，
+                 * ctl listen / netlink watch / 单实例锁，
                  * 避免它们被内层 fork+execlp 派生的 curl（v1.2.8 起不再走
                  * system/sh）继承泄漏，也避免与父进程 poll 主循环的 fd 语义
                  * 纠缠。map fd 必须保留（子进程要经 bpf 系统调用灌 CNIP，见下）。 */
                 if (lfd >= 0) close(lfd);
                 if (evfd >= 0) close(evfd);
-                if (dl.fd >= 0) close(dl.fd);
                 if (lock_fd > 0) close(lock_fd);
                 r = cnip_auto_update(&ctx, &cfg);
                 _exit(r == 0 ? 0 : 1);
@@ -966,7 +943,6 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
         /* 记录各自在 fds[] 中的实际下标，避免 fd 为 -1 时错位读到未初始化槽位 */
         if (lfd >= 0) { fds[nfds].fd = lfd; fds[nfds].events = POLLIN; lfd_idx = nfds; nfds++; }
         if (evfd >= 0) { fds[nfds].fd = evfd; fds[nfds].events = POLLIN; evfd_idx = nfds; nfds++; }
-        if (dl.fd >= 0) { fds[nfds].fd = dl.fd; fds[nfds].events = POLLIN; dns_idx = nfds; nfds++; }
 
         rc = poll(fds, nfds, 2000);
         if (rc < 0) {
@@ -976,9 +952,8 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
         }
         if (rc > 0) {
             /* v1.2.7（审查 H3）：poll 只消费 POLLIN，而 POLLERR/POLLHUP/POLLNVAL
-             * 若出现却无人处理，poll 会立即返回 → daemon 100% CPU 忙循环。对三个
-             * fd 的错误事件显式处理：ctl listen / netlink watch 重建，DNS 学习器
-             * 关闭降级（非致命，reload 重开）。 */
+             * 若出现却无人处理，poll 会立即返回 → daemon 100% CPU 忙循环。对两个
+             * fd 的错误事件显式处理：ctl listen / netlink watch 重建。 */
             if (lfd_idx >= 0 &&
                 (fds[lfd_idx].revents & (POLLERR | POLLHUP | POLLNVAL))) {
                 LOG_WARNF("ctl listen fd 异常(0x%x)，重建监听 socket",
@@ -993,17 +968,11 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 close(evfd);
                 evfd = iface_watch_open();
             }
-            if (dns_idx >= 0 &&
-                (fds[dns_idx].revents & (POLLERR | POLLHUP | POLLNVAL))) {
-                LOG_WARNF("dns 学习器 fd 异常(0x%x)，关闭学习器（reload 后重开）",
-                          fds[dns_idx].revents);
-                dns_learn_close(&dl);
-            }
 
             if (lfd_idx >= 0 && (fds[lfd_idx].revents & POLLIN)) {
                 int c = accept(lfd, NULL, NULL);
                 if (c >= 0) {
-                    ctl_serve(&ctx, cfg_path, &cfg, &cnip_next_ms, &dl, &rov,
+                    ctl_serve(&ctx, cfg_path, &cfg, &cnip_next_ms, &rov,
                               &tun_degraded, c);
                     close(c);
                 }
@@ -1030,16 +999,13 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                     tun_sync_last_ms = now_ms();
                 }
             }
-            if (dns_idx >= 0 && (fds[dns_idx].revents & POLLIN)) {
-                dns_learn_poll(&dl);
-            }
         }
 
-        /* 心跳兜底：tun 存活同步不依赖 poll 超时。持续 DNS 流量下 dl.fd 恒可读、
-         * poll 几乎不超时——若只放 rc==0 分支则兜底形同虚设：mihomo 重建 utun 且
-         * netlink 事件漏收时 map_tun 残留旧 ifindex，代理流量被内核 __skb_do_redirect
-         * kfree_skb 静默丢弃（v1.0.6 故障面）。代价：每秒一次 rtnetlink 全量 dump
-         * （<1ms）。事件路径（见上）已第一时间复用快照对齐，此处是事件漏收时的兜底。
+        /* 心跳兜底：tun 存活同步不依赖 poll 超时（每轮循环节流执行，而非只在
+         * poll 超时分支）。mihomo 重建 utun 且 netlink 事件漏收时 map_tun 残留
+         * 旧 ifindex，代理流量被内核 __skb_do_redirect kfree_skb 静默丢弃
+         * （v1.0.6 故障面）。代价：每秒一次 rtnetlink 全量 dump（<1ms）。事件路径
+         * （见上）已第一时间复用快照对齐，此处是事件漏收时的兜底。
          * v1.2.4：utun 缺失降级期间（tun_degraded=1）把间隔从 1s 收紧到 300ms——
          * mihomo 重载重建 utun 时若 NEWLINK 事件漏收，恢复代理的等待从 ≤1s 缩到
          * ≤300ms，缩小"代理完全失效"的窗口；正常状态仍 1s。 */
@@ -1095,15 +1061,6 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
             hijack_last_ms = now_ms();
         }
 
-        /* DNS 学习条目过期清理（30s 节流；内核查到过期条目会跳过，
-         * 这里只负责回收 map 空间，频率低一点无碍） */
-        if (dl.fd >= 0 && now_ms() - dns_prune_last_ms >= 30000) {
-            int pruned = map_dns_prune(&ctx, (uint64_t)now_ms() * 1000000ULL);
-
-            if (pruned > 0)
-                LOG_DEBUGF("dns 学习: 清理过期条目 %d", pruned);
-            dns_prune_last_ms = now_ms();
-        }
     }
 
     LOG_INFOF("splitd 退出");
@@ -1113,7 +1070,6 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
 
         waitpid(cnip_pid, &st, WNOHANG);
     }
-    dns_learn_close(&dl);
     split_unload(&ctx);
     if (lfd >= 0) {
         close(lfd);

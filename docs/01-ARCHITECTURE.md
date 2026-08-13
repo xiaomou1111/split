@@ -107,9 +107,7 @@ CN 流量（如百度）路径：
 | 6 STAT_REDIRECT_ERR | 重定向失败 | 恒 0 为佳 |
 | 7 STAT_DROPPED | 丢弃（不应发生） | 恒 0 |
 | 8 STAT_MISS_TUN | 想代理但 tun 未就绪（放行） | 启动初期可出现；**持续增长 = mihomo TUN 消失，v1.2.9 watchdog 自愈（见 USAGE.md Q8）** |
-| 9 STAT_DOM_PROXY | 域名规则命中 → 代理 | curl 命中域名代理规则后 +1 |
-| 10 STAT_DOM_DIRECT | 域名规则命中 → 直连 | curl 命中域名直连规则后 +1 |
-| 11 STAT_DIRECT_V6 | v6 且 ipv6_classify=false 的配置性直连 | 关闭 v6 分类后 +1 |
+| 9 STAT_DIRECT_V6 | v6 且 ipv6_classify=false 的配置性直连 | 关闭 v6 分类后 +1 |
 
 `splitctl stats` 按 per-CPU 汇总打印。
 

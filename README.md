@@ -1,8 +1,7 @@
-# eBPF-Split — 内核级 CNIP/域名分流流量转发框架
+# eBPF-Split — 内核级 CNIP 分流流量转发框架
 
-> v1.3.1 ｜ 用 eBPF 在**内核**完成"去往中国大陆的流量直连、海外流量进代理"的分流，
+> v1.4.0 ｜ 用 eBPF 在**内核**完成"去往中国大陆的流量直连、海外流量进代理"的分流，
 > 再把需要代理的流量转发给 **mihomo(Clash/Meta)** 等任意 TUN 代理内核。
-> v1.1.0 起支持**域名分流**（DNS 学习 + 内核域名后缀规则表）。
 > 设计目标：**高可读、强模块化、安卓优先兼容**。
 
 ```
@@ -15,7 +14,6 @@
  │  │ TC-Egress: split.bpf.o    │ │ ← eBPF 在物理网卡发送侧挂载
  │  │  1. 解析报文 (L2/L3/L4)    │ │
  │  │  2. 策略判定               │ │
- │  │     · 域名规则 → 按规则     │ │  ← DNS 学习 + 后缀匹配 (v1.1.0)
  │  │     · CNIP(中国) → 直连    │ │  ← LPM_TRIE 免于内存
  │  │     · fake-ip → 交代理      │ │
  │  │     · UID 白名单 → 直连     │ │
@@ -35,8 +33,6 @@
 
 原理动画一句话：**直连流量根本不进代理，只有"该代理的流"才在内核被拦下来塞进
 mihomo 的 TUN**——因此分流发生在内核侧，代理 CPU 压力极小、直连延迟隐断。
-域名分流由 splitd（用户态 AF_PACKET）学 DNS 响应得 `IP→域名`，内核 egress
-据此对 `proxy_domains/direct_domains` 规则做后缀匹配（详见 docs/02 §2.6）。
 
 ---
 
@@ -65,7 +61,6 @@ split/
 │   │   ├── maps.h             所有 BPF MAP 定义（单一真相源）
 │   │   ├── parse.h            报文解析（安全边界检查）
 │   │   ├── radix.h            LPM_TRIE 匹配封装 (IPv4/IPv6)
-│   │   ├── dom.h              域名匹配（v1.1.0，反转 LPM + 后缀回溯）
 │   │   ├── policy.h           策略判定（modular 判定顺序）
 │   │   └── split.bpf.c        唯一入口程序（SEC("classifier")）
 │   └── Makefile               BPF 编译
@@ -74,8 +69,7 @@ split/
 │   ├── common/                日志 / 配置 / netlink / paths
 │   ├── loader/                BPF 对象加载、tc 挂载、接口发现
 │   ├── cni/                   CNIP 数据灌入 map
-│   ├── rule/                  规则管理（proxy/direct/UID/域名）
-│   ├── dns/                   DNS 学习器（v1.1.0，AF_PACKET → IP→域名）
+│   ├── rule/                  规则管理（proxy/direct/UID）
 │   ├── daemon/                splitd 守护（生命周期 / ctl 协议）
 │   ├── cli/                   splitctl 命令行工具
 │   └── Makefile
@@ -160,17 +154,15 @@ curl https://www.baidu.com       # 直连（不经过 mihomo）
 |------|------|------|
 | `parse` | kernel/bpf/parse.h | L2/L3/L4 解析、边界校验、vlan 处理 |
 | `radix` | kernel/bpf/radix.h | LPM_TRIE 最长前缀匹配封装 |
-| `dom` | kernel/bpf/dom.h | 域名匹配（v1.1.0：IP→域名反查 + 后缀规则回溯） |
 | `policy` | kernel/bpf/policy.h | 分流裁决：直连 / 代理 / 默认 |
 | `classify` | kernel/bpf/split.bpf.c | tc 入口 + UID 白名单 + redirect |
 | `maps` | kernel/bpf/maps.h | 全局 map 清单（单一真相源） |
 | `loader` | userspace/loader/ | libbpf 加载、BPF_TC 挂载 |
 | `iface` | userspace/loader/iface.c | 接口发现 / 物理网卡判定 |
 | `cnip` | userspace/cni/ | CNIP 下载 / 解析 / 写入 trie map |
-| `rule` | userspace/rule/ | proxy/direct CIDR、域名规则、UID 维护 |
-| `dns` | userspace/dns/ | DNS 学习器（v1.1.0：AF_PACKET → IP→域名） |
+| `rule` | userspace/rule/ | proxy/direct CIDR、UID 维护 |
 | `daemon` | userspace/daemon/ | splitd 生命周期 / ctl 协议 / reload |
-| `cli` | userspace/cli/ | splitctl（status/stats/dns/add-rule/del-rule...） |
+| `cli` | userspace/cli/ | splitctl（status/stats/add-rule/del-rule...） |
 | `config` | userspace/common/ | split.yaml 解析（含 parse_bool） |
 | `netlink` | userspace/common/ | 接口枚举（须先 bind）/ 物理判定 |
 | `paths` | userspace/common/ | 运行时路径（Android 走 SPLIT_SOCKET） |

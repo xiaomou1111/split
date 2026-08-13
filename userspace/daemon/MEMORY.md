@@ -37,11 +37,11 @@
    命令协议不变（单命令一连接、回复后 close）。v1.0.6 起的"poll 一次 + read 一次"实现只对单次小 write 有效，
    勿回退。**发送方必须带 `'\n'` 终止**（splitctl send_cmd 已同步；协议契约，新增发送方必看）。
    **v1.1.6 加固：缓冲满仍未收到 '\n'（`truncated`）→ 直接回 `ERR 命令过长\nEND` 并 return**，不再按截断串解析——避免"收到半截规则"的歧义。
-- 命令：`stats` / `status` / `reload-cnip` / `reload` / `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]` / `stop` / **`dns`（v1.1.0）** / **`list-rules`（v1.2.2）**；未知 → `ERR 未知命令`。
+- 命令：`stats` / `status` / `reload-cnip` / `reload` / `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]` / `stop` / **`list-rules`（v1.2.2）**；未知 → `ERR 未知命令`。
 - **`reload-cnip`（v1.1.6 防并发双写）**：CNIP 更新子进程运行中（`g_cnip_busy=1`）时回
   `ERR CNIP 更新进行中`——父进程 `cnip_apply`（reload-cnip）与 fork 子进程同写一组 CNIP
   LPM_TRIE map 是"清空→写入"交错，会产生瞬时 CNIP 缺失。忙标志在 fork 前置 1、fork 失败/
-  waitpid 回收后清 0。`reload` 不写 CNIP map（只重放 rule/uid/dom 与接口），无需此闸。
+  waitpid 回收后清 0。`reload` 不写 CNIP map（只重放 rule/uid 与接口），无需此闸。
   **v1.2.0（H2）显式化不变式**：CNIP map 的写入方只有"fork 的 auto-update 子进程"与
   "reload-cnip 主线程"，二者靠 `g_cnip_busy` 互斥；若未来给 `reload` 增加 CNIP 重灌，
   必须同步加 `g_cnip_busy` 检查，否则破坏该单写方不变式。
@@ -52,7 +52,6 @@
   **v1.2.8（审查修复）**：`hijack` 字段改读主循环 10s 节流缓存的 `g_hijack_now`（含 -1=检测
   失败）——此前 `ctl_status` 在 ctl 路径同步重跑 `route_tun_hijacked`（2~4 次 netlink dump、
   最坏 4×2s），阻塞主循环的 ctl/网络事件/CNIP 调度。现 status 至多 10s 陈旧，不再阻塞。
-- **`dns`（v1.1.0 新增）**：输出学习器状态 `fd/learned/skipped/entries4/entries6`——真机排查"域名分流是否在学习"的关键命令（`splitctl dns`）。
 - **`list-rules`（v1.2.2 新增，WebUI 规则列表）**：枚举 proxy/direct 四个规则 map（LPM_TRIE），逐行回 `proxy <cidr>` / `direct <cidr>`（v4 在前、v6 在后）；先 `OK` 后数据行再 `END`，无规则则只有 OK/END 两行。实现走 loader 的 `map_rule_foreach`（prev-key 顺序迭代，不删键）。**展示的是 map 实况**（配置基线 + 运行时 add-rule/del-rule 的结果），改输出格式必须同步 app.js 的 loadRules。
 - **`reload`（v1.0.6 起）是"重读配置文件再全量应用"**：`config_load(cfg_path)` 成功后把结果写回
   daemon 的活配置（`cnip_next_ms` 按新 `cnip_auto_update_hours` 重算；`debug:true` 同步日志级别，
@@ -89,7 +88,7 @@
   **必须无视 SIGPIPE（审查加固）**：`ctl_reply` 用 `write` 回 socket，客户端在回复期间断开会触发
   SIGPIPE、默认动作直接杀死 splitd（残留 tc filter+map 失守）。启动时 `signal(SIGPIPE, SIG_IGN)`（daemon_loop），
   让 write 返回 EPIPE 走 `w <= 0` 放行路径。**别删，也别改成依赖临时捕获**。
-- `ctl_stats` 的名字数组**下标对应 STAT_* 枚举**（0..10，v1.1.0 追加 dom_proxy/dom_direct；追加 **11=direct_v6**，v6 未分类直连项），追加新统计要同时扩展两个数组。
+- `ctl_stats` 的名字数组**下标对应 STAT_* 枚举**（**0..9**，v6 未分类直连项 `direct_v6`=9；v1.4.0 随域名统计 dom_proxy/dom_direct 删除后自 11 重排为 9——仅运行时统计 map，无持久 ABI），追加新统计要同时扩展两个数组。
   **v1.1.9：循环上界由 `names[]` 元素数与 `STAT_MAX` 取小**（不再硬编码 10），新增段只加 names 项即可自动扩展。
 - **add-rule/del-rule 拆词（v1.1.9）**：改用 `split_two()` 按 space/tab 任意组合拆分 cidr 与
   `which`——旧 `strchr(arg,' ')` 只认空格，`<cidr><TAB>direct` 会让 which 含 tab 前缀比较失败回 ERR。
@@ -98,15 +97,6 @@
   参数（daemon_loop 传入）。add-rule/del-rule 先写 map、成功后再 `rule_override_record` 记录
   偏差（满/非法回 ERR 与说明）；reload 后由 `rule_overrides_replay` 重放——CLI 在线规则跨
   reload 保留。**重启即丢、不落盘**。详见 rule/MEMORY 第 7 条。
-
-## DNS 学习器（v1.1.0 域名分流）
-- **生命周期**：`rule_apply_all` 之后、ctl 监听之前 `dns_learn_open(&dl, &ctx)`；**打开失败仅 WARN 不退出**
-  （主分流/CNIP 不受影响，只是域名功能不生效）；退出前 `dns_learn_close`。
-- **poll 集成**：dl.fd 非阻塞（O_NONBLOCK）+ 加入 poll（fds[3]，dns_idx 下标）；POLLIN → `dns_learn_poll`
-  读尽当前包（EAGAIN 截止），**绝不阻塞主循环**。
-- **过期清理**：循环末尾每 30s 节流 `map_dns_prune(&ctx, now_ms()*1e6)`（启动钟纳秒，与内核
-  `bpf_ktime_get_boot_ns`/学习器 `now_ns` 同源 CLOCK_BOOTTIME）；内核查到过期条目会跳过，清理只是回收 map 空间。
-- 详见 `userspace/dns/MEMORY.md` 与 kernel/bpf/MEMORY.md 第 19/20 条。
 
 ## 网络切换
 - `iface_watch_poll>0` → `LOG_INFOF` + `iface_reconcile`（增量对齐挂载）。WiFi↔蜂窝切换走此路径。
@@ -136,9 +126,10 @@
 - **机制（v1.1.2 重构 / v1.2.1 三触发 / v1.2.4 复核+快重试 / v1.2.5 名字漂移兜底 / v1.2.6 按类型兜底）**：`tun_sync(ctx, cfg[, snap])`
   接受可选快照（非 NULL 复用、NULL 自扫，与 iface_reconcile 同款约定）。触发点：
   - **心跳兜底**：每轮 poll 循环末按 1s 节流无条件执行（`tun_sync_last_ms`），
-    **不再依赖 poll 超时（rc==0）**——持续 DNS 流量下 dl.fd 恒可读、
-    poll 几乎不超时，旧"心跳只在超时分支"的方案兜底形同虚设（mihomo 重建 utun 且 netlink
-    事件漏收时静默丢包窗口无限放大）。代价：每秒一次 rtnetlink 全量 dump（<1ms，可忽略）。
+    **不再依赖 poll 超时（rc==0）**——v1.1.2 起即如此（当时 poll 会因 DNS 学习器 fd 恒可读
+    几乎不超时，旧"心跳只在超时分支"的方案兜底形同虚设；v1.4.0 移除学习器后 poll 常规 2s
+    超时，但"事件漏收时的静默丢包窗口"依然存在，兜底语义不变）。代价：每秒一次 rtnetlink
+    全量 dump（<1ms，可忽略）。
     **v1.2.4 降级快重试**：`tun_sync` 返回 1（map_tun=0 降级中）时，心跳间隔由 1s
     收紧到 `TUN_SYNC_DEGRADED_MS=300ms`（`tun_degraded` 标志，事件/reload/心跳三处
     同步维护）——utun 重建回来后恢复代理最长等待 ≤300ms；正常状态保持 1s。
@@ -204,7 +195,7 @@
 - 语义是"重读配置里 path_v4/path_v6 指向的本地文件"；文件由用户侧定时更新（如 cron + fetch-cnip.sh）。不内置网络下载。
 - `cnip_apply` 内部已"先清 map 再全量"，重复调用安全（见 cni/MEMORY.md）。
 - 注意：fork 子进程继承 ctx 的 map fd，可直接灌入；子进程里不要调用会阻塞主循环的东西（它只跑 cnip_auto_update 就 `_exit`）。
-- **子进程 fd 清理**：子进程 fork 后立即关闭与更新无关的父进程 fd（ctl listen `lfd` / netlink watch `evfd` / DNS AF_PACKET `dl.fd` / 单实例锁 `lock_fd`），避免它们被 curl（v1.2.8 起 `cnip_load_url` 内层 `fork+execlp` 派生的 curl）继承泄漏、也避免与父进程 poll fd 语义纠缠；map fd 保留供灌入。
+- **子进程 fd 清理**：子进程 fork 后立即关闭与更新无关的父进程 fd（ctl listen `lfd` / netlink watch `evfd` / 单实例锁 `lock_fd`），避免它们被 curl（v1.2.8 起 `cnip_load_url` 内层 `fork+execlp` 派生的 curl）继承泄漏、也避免与父进程 poll fd 语义纠缠；map fd 保留供灌入。
 
 ## 路由接管检测（v1.1.3，防"分流失效静默无报错"）
 - **背景（真机教训）**：mihomo 配置若是 box 原样（auto-route:true），mihomo 会在 tun 挂
@@ -224,12 +215,11 @@
   mtu:1500 / auto-detect-interface:false）——见 android/MEMORY.md。
 
 ## 坑与边界
-- `poll` 2s 超时只是"无事件时唤醒心跳"的下界；lfd/evfd/dns fd 在 `fds[]` 里的**下标由 `lfd_idx/evfd_idx/dns_idx` 记录**（任一 fd 为 -1 时不会错位读未初始化槽位），新增 fd 必须同步。
-- **poll 错误事件必须显式消费（v1.2.7 审查 H3，勿回退）**：三个 fd 只处理 `POLLIN`，若出现
+- `poll` 2s 超时只是"无事件时唤醒心跳"的下界；lfd/evfd 在 `fds[]` 里的**下标由 `lfd_idx/evfd_idx` 记录**（任一 fd 为 -1 时不会错位读未初始化槽位），新增 fd 必须同步。
+- **poll 错误事件必须显式消费（v1.2.7 审查 H3，勿回退）**：两个 fd 只处理 `POLLIN`，若出现
   `POLLERR/POLLHUP/POLLNVAL` 而无分支消费，poll 会立即返回 → daemon 100% CPU 忙循环。
-  现对三个 fd 的错误位显式处理：ctl listen / netlink watch **重建**（`ctl_listen()` /
-  `iface_watch_open()`，内部各自 unlink/bind），DNS 学习器 **关闭降级**（`dns_learn_close`，
-  非致命，reload 重开）。勿把"只查 POLLIN"改回去。
+  现对两个 fd 的错误位显式处理：ctl listen / netlink watch **重建**（`ctl_listen()` /
+  `iface_watch_open()`，内部各自 unlink/bind）。勿把"只查 POLLIN"改回去。
 - `ctl_reply` 返回 int（v1.2.7 审查 H4）：0=完整写出，-1=客户端断开/写失败。list-rules 的
   `ctl_rule_line` 回调收到 -1 即返回非 0，`map_rule_foreach` 提前中止——避免对已断开连接继续
   枚举数千条规则耗时。其它调用方按语句使用忽略返回值，无行为变化。
@@ -237,9 +227,6 @@
 - 退出路径（v1.0.6）：`stop` 时若 CNIP 更新子进程还在跑，先 `waitpid(WNOHANG)` 收尸不阻塞，
   子进程持有 map fd 让其自然完成（孤儿化后由 init 接管，maps 在最后一个 fd 关闭时释放）。
 - `tun_sync_last_ms` 初始 0 → 首轮循环即做首次兜底同步（v1.1.2 起不再依赖 2s poll 超时）。
-- **DNS 过期清理同样不依赖 poll 超时（v1.1.2 起）**：30s 节流的 `map_dns_prune` 在每轮循环末
-  无条件执行（旧代码 rc==0 分支 `continue` 会跳过清理，空闲设备上过期条目无人回收、
-  学习 map 可能被占满导致新学习 skipped）。
 - `exit(2)`（BPF 加载失败）是**真实退出**不是降级——mihomo 若 auto-route:false 则无分流兜底；
   `android/magisk/service.sh` 通过 `splitctl status` 检测并打日志提示（改 exit code 必同步该脚本）。
 

@@ -4,18 +4,18 @@
 > 依赖 libbpf>=1.0。**loader 是用户态对全局 map 的唯一通道**（CONTRIBUTING §2）。
 
 ## 接口契约（loader.h 即 ABI）
-- `split_load(ctx, obj_path)`：open → find `split_classify` → load → 绑定 **15 个 map 句柄**（v1.1.5 起：原 14 个 + map_rawip）。
+- `split_load(ctx, obj_path)`：open → find `split_classify` → load → 绑定 **11 个 map 句柄**（v1.4.0 起：v1.1.5 的 15 个 - 域名分流 4 个）。
 - `split_attach_iface / split_detach_iface / split_detach_all`：tc 挂载管理。
 - `map_set_tun / map_get_tun / map_set_cfg / map_skip_uid_add|del / map_rule_add_cidr / map_cnip_add_cidr / map_rule_clear / map_cnip_clear / map_stats_dump`。
-  - **`map_set_cfg`（v1.2.0）签名改为 `(ctx, default_verdict, ipv6_on, skip_uid_on, dom_on)`**：
-    新增 `skip_uid_on`/`dom_on` 两个短路 flag，供内核热路径跳过空 map 的查表
-    （对应 `split_cfg.skip_uid_enabled`/`dom_enabled`）。**唯一调用方 rule.c 必须同步传值。**
+  - **`map_set_cfg`（v1.2.0）签名改为 `(ctx, default_verdict, ipv6_on, skip_uid_on)`**：
+    新增 `skip_uid_on` 短路 flag，供内核热路径跳过空 map 的查表
+    （对应 `split_cfg.skip_uid_enabled`）。**唯一调用方 rule.c 必须同步传值。**
+    **v1.4.0：移除 `dom_on` 参数**（域名分流整模块删除，见 kernel/bpf/MEMORY 第 19 条）。
     **v1.3.1（审查修复）：内部把 `bpf_trace_enabled` 置 1 作为"已初始化"哨兵**——
     map_cfg 是 ARRAY map lookup 永不 NULL，未写入时返回全零元素（default_verdict=0=直连），
     与"未知→代理安全默认"契约相悖；内核 policy.h 凭 `bpf_trace_enabled==0` 回落 TUN。
   - **`map_get_tun`（v1.0.6 新增）**：读 map_tun 当前 ifindex，供 daemon `tun_sync` 做"变化才写"的
     对齐（见 daemon/MEMORY.md tun 存活同步节）。
-- v1.1.0 域名分流接口：`map_dom_add/del/clear`（域名规则）、`map_dns_set/prune/count`（学习器写入/过期清理/计数）。
 - **`map_cnip_count(ctx,&n4,&n6)`（v1.1.3 新增）**：遍历 CNIP map 计数（status 自检用；0 条=文件缺失/未导入）。
   实现**必须用 prev-key 顺序迭代**（先取首键，再 `get_next_key(prev,next)` 循环）——与 `map_clear_by_keys` 的
   "反复取首键"相反：那是删除场景（删键后 get_next_key(prev) 提前 -ENOENT），计数不删键，若复用"反复取首键"
@@ -93,21 +93,11 @@
     失败槽按 0 输出但日志可查。
 11. `map_rule_clear / map_cnip_clear`（reload 前清空，保证"先清空再写"幂等，走 `map_clear_by_keys`）。清 LPM_TRIE 必须"反复取首键（cur=NULL）+ delete"；**不要**用 `get_next_key(前一个键)` 迭代——删键不在 trie 后 `lpm_trie_get_next_key` 会 -ENOENT 提前终止导致残留。
     **v1.0.5 防死循环**：`delete_elem` 失败（如权限/竞争）时必须 break，否则反复取回同一键无限循环。
-    **v1.1.1 修复**：键缓冲 `cur[128]` ≥ 最大 key 大小（dom_key=4+64=68B）。此前 `cur[32]` 让
-    `map_dom_clear` 静默失败（返回 -1 被忽略），reload 后旧域名规则残留——改 key 大小必须复查此缓冲。
+    **v1.1.1 修复**：键缓冲 `cur[128]` ≥ 最大 key 大小（当时最大为 dom_key=4+64=68B；v1.4.0
+    移除域名 map 后现最大为 lpm_key6=4+16=20B）。此前 `cur[32]` 让 `map_dom_clear` 静默失败
+    （返回 -1 被忽略），reload 后旧域名规则残留——改 key 大小必须复查此缓冲。
 12. `iface.h`：`iface_resolve_tun(name)` 用 `iface_index_by_name` 兜；不存在返回 -1 → daemon 提前退出（exit 3）。
-13. **域名规则写入（v1.1.0，map_dom_add 的 domain_to_rev）**：字符白名单 `a-z0-9._-`、去 `*.` 通配
-    （DOMAIN-SUFFIX 语义）与 FQDN 尾点、**反转 + 小写**后进 LPM key（`prefixlen = len*8`），
-    value `dom_rule.len = len`（内核边界检查用）。超长（>SPLIT_DOM_MAX=64 字节）拒绝。
-    **v1.1.3：`map_dom_add/del` 校验 `which`（非 0/1 直接 -1）**，防非法值误写 direct 表。
-    **编码必须与 dns.c 学习器（写 map_dns4/6）和内核 dom.h 完全一致**（split_bpf.h「域名分流」节为真相）。
-14. **map_dns_* 与内核时钟契约（v1.1.9 改 BOOTTIME）**：`map_dns_set` 的 expire_ns 必须用 CLOCK_BOOTTIME 纳秒
-    （内核 `bpf_ktime_get_boot_ns` 同源）；`map_dns_prune(now_ns)` 用 **prev-key 顺序迭代**
-    （先取首键，再 `get_next_key(prev,next)` 前进；只删过期的）。**不能**用"反复取首键"
-    （那是 map_clear_by_keys 的全量删除场景）——未删条目会让每轮 `get_next_key(NULL)`
-    永远返回同一首键 → 死循环。
-    **HASH map 满了 update 直接失败**（无淘汰）→ 学习器静默跳过（skipped 计数），映射短暂不生效而已。
-15. **map_rawip（v1.1.5，蜂窝 RAWIP 修复）**：`map_rawip_sync(ctx, ifindex[, snap])`——
+13. **map_rawip（v1.1.5，蜂窝 RAWIP 修复）**：`map_rawip_sync(ctx, ifindex[, snap])`——
     ifindex>0 单接口按 `iface.type==ARPHRD_RAWIP(519)` 写入/删除；ifindex=0 全量同步。
     **v1.1.9：新增可选 `snap` 快照参数**（非 NULL 复用、NULL 自扫），`iface_reconcile`
     全程透传同一快照，使"挂载+RAWIP 同步"在一次 reconcile 里共用一次 scan。

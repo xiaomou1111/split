@@ -1,6 +1,6 @@
 ﻿# 构建指导（BUILD.md）
 
-> eBPF-Split v1.3.1 ｜ 从源码到可分发模块的完整构建流程
+> eBPF-Split v1.4.0 ｜ 从源码到可分发模块的完整构建流程
 > 覆盖：Linux 原生构建、arm64 交叉编译、Magisk 模块打包、常见问题
 
 ---
@@ -188,7 +188,6 @@ adb shell "... splitctl stats"                             # 看 direct_cn/proxy
 | arm64 链接报 libelf 缺失 | `apt install libelf-dev:arm64`（multiarch） |
 | gen-magisk.sh 报 zip 目录错误 | 确认 `zip` 已装；脚本已修 `mkdir -p "$(dirname)"` |
 | 打包没 mihomo | 把 mihomo 放 build/arm64/mihomo |
-| arm64 交叉报 `struct sock_filter` 不完整 / `BPF_STMT` 未声明 | 已随 v1.2.7 移除 dns 学习器的 cBPF socket filter 而不再触发；若仍有此报，说明引回了 cBPF（勿回退，见 userspace/dns/MEMORY 第 11 条） |
 | 构建区被 WSL 清 | libbpf 放 /root（持久），勿放 /tmp |
 
 ---

@@ -26,6 +26,9 @@
 - **零重复（v1.1.x 约定）**：`/data/adb/modules/split/` 只做"安装源 + Magisk 必需文件"，`/data/adb/split/`
   是**唯一运行真源**。customize.sh 铺完 bin/config/scripts/mihomo 到运行目录后 `rm -rf` 模块预留副本；
   升级时 Magisk 整包重跑 customize.sh 重新铺入。运行时脚本一律引用 `/data/adb/split`，禁止从 `$MODPATH` 读执行内容。
+  **审查修复（2026-08）：`config/split.yaml` 加 `[ ! -f ]` 升级保护**——只在首次安装铺默认配置，
+  用户改过的自定义规则不再被升级包无条件 `cp` 覆盖（P0 数据丢失；口径与 mihomo config 的
+  `[ ! -f ]` 保护一致）。改此守卫时必须与 mihomo 配置拷贝（mihomo/config.yaml）同查同改。
 - 坑 4（v1.0.2 实测）：**`export SPLIT_SOCKET="$INSTALL_DIR/run/splitd.sock"`** 必须在起 splitd 前设置
   （Android 无 /run，不设则 ctl socket 绑不上）。service.sh / start-split.sh / stop-split.sh 都已加。
 - 坑 5（v1.0.2 实测）：**BPF 必须 `-mcpu=v1`**，否则真机 5.x GKI verifier 报 `BPF_STX uses reserved fields` 拒载（见 docs/03 §8.5）。
@@ -69,6 +72,14 @@
   **v1.3.1（审查修复）：冷却时钟改用 `/proc/uptime` 单调秒**——旧 `date +%s` 在部分设备
   缺失（回退 echo 0 旁路冷却）且墙钟跳时会失效/误延长；uptime 不随系统时间调整。
   **注意**：`curl` 在 Android 上未必存在——API 分支失败会自然落到重启分支，重启是保底。
+  **审查修复（2026-08）：自愈 PATCH 支持 mihomo secret 鉴权**——mihomo config 配了
+  `external-controller` 密码时，不带 `Authorization: Bearer` 会 401 被误判为"API 不可达"而
+  多余重启（断连）。现从 config.yaml 简单 sed 提取 secret（去引号/行内注释），非空则带鉴权头，
+  读不到/为空按旧逻辑不带。提取失败只会 401 → 自然落 `restart_mihomo`（该函数即原重启块，
+  已抽出复用，两路径共用）；`curl` 缺失同样落重启兜底。重启块改动唯一定点 = `restart_mihomo()`。
+  **配套（同一批次）**：配置模板 `configs/mihomo/mihomo-package.yaml` 的 `external-controller`
+  由 `0.0.0.0:9090` 改绑 `127.0.0.1:9090`——封掉"9090 无 secret + allow-lan"这个 LAN 操控面
+  （旧故障模式见上）；全库对 9090 的调用方本就只走 127.0.0.1（watchdog / 状态栏磁贴），无破坏。
 - **单实例**：脚本自身启动时 kill 旧的自身进程（`pgrep -f split-watchdog.sh`，排除 `$$`）。
 - 与 boot 自启关系：service.sh 在 splitd 起来后拉起；WebUI `start` 也会拉。手动前台
   `start-split.sh`（-d 调试）不拉 watchdog，适合一轮排障。
@@ -150,7 +161,7 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 - **后端**：`scripts/webuiapi.sh`（经 `ksu.exec` 以 root 调 `/data/adb/split/scripts/webuiapi.sh <action>`）。
   为什么放 scripts/ 而非 webroot/：webroot 由 KernelSU 设定为网页服务上下文，脚本放运行期目录
   `/data/adb/split/scripts/` 与既有 start/stop 一致，也避开执行权限歧义。
-- **动作白名单**：status/stats/**dns（v1.2.2）**/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
+- **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
   行数 n 走整型白名单（非纯数字回退 200），`tail` → `busybox tail` → `cat` 兜底；日志尾按行截断避免打爆 WebView。
   action 由 case 分支映射，**不透传任意 shell **；参数经 shell 引号包裹（单引号 CIDR）防注入。
 - **env 动作（WebUI 完善）**：环境信息 `key=value` 行——kernel/arch（uname）、android/sdk/device（getprop）、

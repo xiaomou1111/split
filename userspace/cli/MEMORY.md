@@ -9,7 +9,6 @@
   改为 debug，路径改由 `-s` 指定**——与 daemon 的 `-d` 语义对齐；splitctl 收到 `-d` 会把它转发给
   派生 splitd（`splitd -d` 即 debug）。无脚本依赖旧 `-d=路径`（grep 已核实）。
 - `stop` / `status` / `stats` / `reload` / `reload-cnip`：经 socket 单命令发送。
-- `dns`（v1.1.0）：经 socket 发送，输出学习器状态（fd/learned/skipped/entries4/entries6）——真机排查"域名分流是否在学习"。
 - `list-rules`（v1.2.2）：经 socket 发送，逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表展示/删除用。
 - `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]`：经 socket 发送到 daemon（v1.0.1 已实现）。
 - `validate -c cfg`：本地 `config_load` + `config_dump`，不碰 daemon。

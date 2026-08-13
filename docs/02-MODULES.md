@@ -25,20 +25,12 @@ L4 平台胶水     android/magisk
   | map_cnip6 | LPM_TRIE | u32 pfix + u8[16] | u8 used | 中国 IPv6 |
   | map_rule_proxy4/6 | LPM_TRIE | 同 | u8 | 强制代理段（如 fake-ip, 失败只段）|
   | map_rule_direct4/6 | LPM_TRIE | 同 | u8 | 强制直连段 |
-  | map_dns4 | HASH | u32 ip4 | dns_entry | IP→域名（用户态 AF_PACKET 学习）|
-  | map_dns6 | HASH | u8[16] ip6 | dns_entry | 同上（IPv6 地址）|
-  | map_dom_proxy | LPM_TRIE | dom_key | dom_rule | 代理域名后缀规则（反转存储）|
-  | map_dom_direct | LPM_TRIE | dom_key | dom_rule | 直连域名后缀规则 |
   | map_skip_uid | HASH | u32 uid | u8 allow | uid 白名单（mihomo/root） |
   | map_tun | ARRAY(1) | u32 idx | u32 ifindex | 代理 tun 设备 ifindex（daemon 动态同步：mihomo 重建 utun 时 ifindex 漂移自动对齐；接口消失置 0 → BPF 侧放行保联网） |
-  | map_cfg | ARRAY(1) | u32 idx | struct split_cfg | 默认行为/IPv6/UID/域名短路开关（v1.2.0：skip_uid_enabled、dom_enabled） |
+  | map_cfg | ARRAY(1) | u32 idx | struct split_cfg | 默认行为/IPv6/UID 开关（v1.2.0：skip_uid_enabled） |
   | map_rawip | HASH | u32 ifindex | u8 used | RAWIP 接口集合（v1.1.5：Android 蜂窝 rmnet_data*，ARPHRD_RAWIP=519，无以太网头；用户态挂载/网络事件时同步，内核据此跳过 L2 解析） |
   | map_stats | PERCPU_ARRAY | u32 类型 | u64 计数 | 观测 |
 
-> v1.1.0 域名分流编码契约（字节级，split_bpf.h「域名分流」一节为真相）：
-> `dns_entry.name` / `dom_key.data` 一律存**反转 + 小写**的域名
-> （"example.com" → "moc.elpmaxe"），后缀匹配借 LPM 前缀匹配实现；
-> `dom_rule.len` 是规则字节数（LPM lookup 不返回命中长度，边界检查要用）。
 - **实现要点**：所有 map 在文件头部集中声明，改端口只需动这一个文件。
 - **测试**：`tests/unit/maps_test.c` 验证加载正确大小、类型、max_entries。
 
@@ -70,21 +62,16 @@ L4 平台胶水     android/magisk
   ```c
   enum split_verdict policy_judge(const struct split_pkt *p, __u32 uid, const struct split_cfg *cfg);
   ```
-- **判定顺序（重要，写入注释，v1.1.1 起 8 步；未变，v1.2.0 仅加短路）**：
+- **判定顺序（重要，写入注释，7 步；v1.4.0 移除原第 4 步域名规则）**：
   1. uid 白名单 → 直连（跳过一切，防 mihomo 环；`cfg.skip_uid_enabled==0` 时整段短路，split.bpf.c 亦不调 bpf_get_socket_uid）
   2. v6 且 `default.ipv6=false` → 直连（v6 不参与任何分类，docs/04 契约；
-     必须置于域名/规则/CNIP 之前，否则 proxy6/direct6 仍会命中）
+     必须置于规则/CNIP 之前，否则 proxy6/direct6 仍会命中）
   3. 内部/链路本地/多播(dst) → 直连
-  4. 域名规则（IP→域名反查 + proxy/direct 域名后缀） → 按规则（v1.1.0；`cfg.dom_enabled==0` 时整段短路，省下 map_dns 查表+ktime_get_boot_ns）
-  5. policy_proxy 命中 → 代理
-  6. policy_direct 命中 → 直连
-  7. CNIP(v4/v6) 命中 → 直连
-  8. 其余 → cfg.default_verdict（默认=代理）
+  4. policy_proxy 命中 → 代理
+  5. policy_direct 命中 → 直连
+  6. CNIP(v4/v6) 命中 → 直连
+  7. 其余 → cfg.default_verdict（默认=代理）
 - **实现要点**：顺序即优先级，可配；为可观测性，每次裁决写相邻 stats key。
-- **域名匹配（dom.h）**：LPM 只回最长前缀 → 可能被"非标签边界"的更长规则遮蔽
-  （如规则 `xample.com` 遮蔽 `com` 匹配 `www.example.com`），故命中后做
-  "下一字节必须是 `.`"边界检查，失败则**逐字节递减 prefixlen 再查**（≤64 步
-  线性查询，v1.1.1 起无层数限制；旧"跳标签 8 层"方案已废弃，见 kernel/bpf/MEMORY）。
 
 ### 1.5 split.bpf.c (classify) — 唯一 BPF 入口
 - **职责**：`SEC("classifier") int split_classify(struct __sk_buff*)` 流程编排：
@@ -103,8 +90,6 @@ L4 平台胶水     android/magisk
 ### 2.1 loader/
 - `loader.c`：`bpf_object__open_file` 加载 split.bpf.o，赋 map fd，开全局；tc 挂载（`bpf_tc_*`）
   也在 loader.c（`split_attach_iface`，handle=1 priority=10 固定契约），不存在独立 attach.c。
-- 域名分流 map 操作（v1.1.0）：`map_dom_add/del/clear`（域名 → 反转+小写 → LPM key）、
-  `map_dns_set/prune/count`（学习器写入 / 过期清理 / 计数）。
 - `iface.c`：通过 common/netlink.c 枚举 iface、判断物理性（exclude 名单含 lo/tun/**utun**/tap...），
   订阅 `RTMGRP_LINK`（link 事件），网络切换触发重 attach。
 
@@ -116,8 +101,6 @@ L4 平台胶水     android/magisk
 
 ### 2.3 rule/
 - 维护 `map_rule_proxy* / direct* / skip_uid`：add/del/reload 子命令，配合配置文件字段。
-- 域名规则（v1.1.0）：`map_dom_proxy/direct` 由 `rule_apply_all` 一并"先清空再全量"灌入
-  （配置字段 `rules: proxy_domains:/direct_domains:`，上限 CFG_DOM_MAX=64 条）。
 - 入口：`rule_apply_all(ctx, cfg)`；在线增删：`rule_add(ctx, cidr, which)` / `rule_del(ctx, cidr, which)`。
 - **运行时规则追踪（v1.2.0）**：`add-rule/del-rule` 先写 map、成功后再 `rule_override_record`
   记录期望状态（跨 reload 重放，重启即丢）；**v1.2.9 审查加固：cidr ≥ CFG_STRLEN 显式拒绝记录**
@@ -158,12 +141,9 @@ L4 平台胶水     android/magisk
   **v1.2.8 补充（漂移保持）**：漂移对齐的设备经 `g_tun_drift_idx` 记录并在后续心跳保持有效
   （此前"ifindex > last_good"严格检查会让刚对齐的设备下一轮被排除、map_tun 回退置 0）；
   精确匹配命中/设备缺失时清零恢复重新搜寻，漂移 WARN 仅首次对齐打一次。
-- **DNS 学习器（v1.1.0）**：`dns_learn_open` 起 AF_PACKET fd 入 poll（失败仅 WARN，主分流不受影响），
-  事件驱动 `dns_learn_poll`；30s 节流 `map_dns_prune` 清理过期学习条目；退出 `dns_learn_close`。
-  新 ctl 命令 `dns`（学习器状态：fd/learned/entries4/entries6，真机排查入口）。
 
 ### 2.5 cli/ splitctl
-- 子命令：`start stop status stats dns list-rules reload reload-cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
+- 子命令：`start stop status stats list-rules reload reload-cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
 - `list-rules`（v1.2.2）：逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表用。
 - `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 10s 自检路由接管，变化即打日志。
   **v1.2.8（审查修复）**：`hijack` 字段读主循环 10s 节流缓存的 `g_hijack_now`（含 -1=检测失败），
@@ -171,21 +151,7 @@ L4 平台胶水     android/magisk
   status 至多 10s 陈旧。
 - 通过 unix socket (`/run/splitd.sock`，或 `$SPLIT_SOCKET`) 与 daemon 通信；纯输出。
 
-### 2.6 dns/（v1.1.0 新增）
-- **职责**：AF_PACKET 抓 UDP/53 的 DNS 响应（IPv4 传输，PACKET_HOST），解析 A/AAAA
-  （支持压缩指针/0x20 大小写/TTL），把 `IP→域名` 写进 map_dns4/6。
-- 为什么用户态：DNS 解析在 eBPF 里做有 verifier/真机风险，且**免去新增 ingress hook**
-  （kernel/bpf/MEMORY 既定取舍"不做 ingress"保持不变）。
-- **限制（已知缺口）**：只学 IPv4 传输；TCP/53 与 IP 分片不学；**VLAN 标签帧不学**（socket 只绑
-  `ETH_P_IP`，802.1Q 外层 ethertype 不命中，v1.2.8 文档化）；CNAME 链中每条 A/AAAA
-  按**自身 owner name** 学习（v1.2.0 起支持链、v1.2.7 修正归属，不跨响应/不额外学别名
-  自身）；TTL=0 不学；TTL 上限 7 天（v1.1.2 clamp，防占满学习 map）；**>SPLIT_DOM_MAX 域名
-  截断点非标签边界不学（v1.2.8 防假阳性）**。
-  **v1.2.7**：移除 cBPF 内核预过滤（对 RAWIP 蜂窝接口偏移错位致静默漏学），改由
-  `dns_process_ip4` 用户态全过滤，Ethernet 与 RAWIP 两种布局均正确。
-- **失败语义**：任何解析失败 = 漏判该域名，不影响联网（内核回落 IP 判定）。
-
-### 2.7 common/
+### 2.6 common/
 - `log.c`：级别化的 log（`g_log_level` 全局，宏带 `__func__/__LINE__`）。
 - `config.c`：极简 YAML 子集解析（`section:`/`key: value`/`- item`/`# 注释`）；布尔字段必须走
   `parse_bool()`（支持 true/false/yes/no/on/off/1/0，勿用 atoi）；值/列表项尾空白由 `str_trim_tail()` 清理。
@@ -228,8 +194,6 @@ L4 平台胶水     android/magisk
 | 调整判定顺序 | `kernel/bpf/policy.h`（+ 文档），重新编译 BPF | userspace 无感知 |
 | 改 map 上限/类型 | `kernel/bpf/maps.h`（+ loader 的期望） | 其余不变 |
 | 新增 1 个 hook(如 ingress) | `split.bpf.c` 加 SEC + attach.c | 其余不变，说明连通 |
-| 加域名规则 | `configs` + `reload`（rule_apply_all 自动灌入） | 内核 |
-| 改域名匹配深度/回溯 | `kernel/bpf/dom.h`（v1.1.1 起逐字节递减 prefixlen 查询，无层数限制） | userspace 无感知 |
 
 统一规则：**涉及 map 的改动，唯一牵一而动是 `maps.h` + `loader` 的 map-fd 表**，
 其余模块通过“map 名”解码接口进化。

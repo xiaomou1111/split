@@ -12,8 +12,10 @@
 - [x] CNIP 文本导入（文件/URL）
 - [x] 配置解析与示例（redir-host / fake-ip 两套 mihomo 配置）
 - [x] Android：Magisk 模块骨架 + sepolicy + 降级路径
-- [x] **域名分流（v1.1.0）**：用户态 AF_PACKET 学 DNS 响应（IP→域名）+ 内核
-  `map_dom_proxy/direct` 域名后缀规则（反转 LPM 匹配，优先级高于 IP 段规则）
+- [x] **域名分流（v1.1.0 引入，v1.4.0 整模块移除）**：曾为"用户态 AF_PACKET 学 DNS 响应
+  （IP→域名）+ 内核 `map_dom_proxy/direct` 域名后缀规则（反转 LPM 匹配，优先级高于 IP
+  段规则）"；v1.4.0 移除内核域名判定（policy 8→7 步）、4 个 map、学习器模块与配置，
+  主线回归纯 IP/UID 分流（取舍见文末"已知设计取舍"第 4 点）
 - [x] **熄屏/doze 自愈（v1.1.7）**：daemon 主循环 5s 节流 `iface_reconcile`（netlink 事件漏收
    时自动重建挂载，且 `split_attach_iface` 经 `bpf_tc_query` 核验 filter 真实存在、丢失即重挂）
   + `scripts/split-watchdog.sh`（splitd 进程死亡后按同参数拉起，配停止闸）
@@ -41,10 +43,10 @@
 | ingress 钩子（观察/统计入站） | 未做 | 为省性能刻意不做 |
 | tproxy 模式（`mode: tproxy`） | 不可行 | 内核硬限制：tproxy 目标只支持 PREROUTING，不支持本机出站方向（见"tproxy 模式"节） |
 | eBPF 劫持 → mihomo TUN | 已解决 | `skb->queue_mapping=0` 修复（v1.0.4），真机 curl 200 + Play 可用 |
-| 原生 Android App（UI 开关） | 未做 | 现在 root shell / Magisk 方式（android/app/README）；**KernelSU WebUI**（webroot/）已含：状态/stats/DNS 学习器/在线规则列表与增删/日志/配置编辑/版本号（v1.2.2） |
+| 原生 Android App（UI 开关） | 未做 | 现在 root shell / Magisk 方式（android/app/README）；**KernelSU WebUI**（webroot/）已含：状态/stats/在线规则列表与增删/日志/配置编辑/版本号（v1.2.2；v1.4.0 移除 DNS 卡片） |
 | BPF 单元测试套件 | 骨架 | tests/unit/README 有规划 |
-| DNS 拦截（domain 级分流） | 已实现（v1.1.0） | 用户态学 DNS 响应（IP→域名）+ 内核后缀规则；限制：只学 IPv4 传输的 UDP/53、无分片重组、**CNAME 链支持（v1.2.0）**、首连有学习滞后；超大域名列表请交给 mihomo 规则（fake-ip 模式） |
-| 域名规则在线增删（add-domain/del-domain） | 未做 | 目前走 config + `splitctl reload` 全量应用 |
+| DNS 拦截（domain 级分流） | **已移除（v1.4.0）** | 整模块移除：内核域名判定 + 用户态 DNS 学习器 + 4 个 map + `dns` 命令 + 域名配置段；域名粒度分流统一交给 mihomo（fake-ip/redir-host + 规则引擎） |
+| 域名规则在线增删（add-domain/del-domain） | 不再需要 | 域名分流已随 v1.4.0 整模块移除 |
 | 自动选择 tun 设备 | 半自动 | 必须与配置名一致；失败会明确报错 |
 | 多用户（工作资料）UID 处理 | 配置化 | 需手动加 uid |
 
@@ -91,7 +93,22 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.3.1（当前）        v1.3.0 审查修复批次（6 项）：
+v1.4.0（当前）        移除域名分流（DNS 学习器）整模块，主线回归纯 IP/UID 分流：
+                       ①内核 policy 8 步 → 7 步（删原第 4 步域名规则）；删 dom.h 与 4 个 map
+                         （map_dns4/6、map_dom_proxy/direct，map 15 → 11）；split_bpf.h 删
+                         struct dns_entry/dom_key/dom_rule、SPLIT_DOM_MAX、cfg.dom_enabled；
+                         stats 删 STAT_DOM_PROXY/DIRECT，STAT_DIRECT_V6 重排 11 → 9
+                         （运行时 map 无持久 ABI）
+                       ②用户态删 userspace/dns/ 模块（AF_PACKET 学习器）、ctl dns 命令、
+                         loader 的 map_dom_*/map_dns_*、config 的 proxy_domains/direct_domains、
+                         daemon 的 poll fd / 30s prune / 心跳注释去 DNS
+                       ③配置与 UI：split.yaml 删域名规则段；WebUI 删 DNS 卡片与统计项；
+                         splitctl/脚本撤 dns
+                       ④文档 / 各 MEMORY 全量同步；域名特化的 verifier 教训（读 map value
+                         变量下标显式掩码到 < 2 的幂且无条件前置）沉淀为通用硬契约
+                       ⑤v1.4 原规划"DNS 拦截增强（TCP/53、分片重组）"随整模块移除作废；
+                         域名粒度分流统一交给 mihomo（redir-host/fake-ip + 规则引擎）
+v1.3.1        v1.3.0 审查修复批次（6 项）：
                         ①**map_cfg 安全默认契约修正**：map_cfg 是 ARRAY map、lookup 永不 NULL，
                           未写入返回全零元素（default_verdict=0=直连），与"未知→代理安全默认"
                           相悖。loader `map_set_cfg` 置 `bpf_trace_enabled=1` 作"已初始化"哨兵，
@@ -126,7 +143,6 @@ v1.2.9        审查加固 + 真机问题修复：
                        时经 mihomo API 无感恢复，API 失败重启 mihomo，5 分钟冷却防循环）
 v1.2                  BPF 单元测试（回环注入最小包）+ CI
 v1.3                  Android App MVP：开关 + stats 展示（root/JNI）
-v1.4                  可选：DNS 拦截模块增强（TCP/53、分片重组、CNAME 链）
 ```
 
 ## 已知设计取舍（不再摇摆）
@@ -138,6 +154,9 @@ v1.4                  可选：DNS 拦截模块增强（TCP/53、分片重组、
    面向"真实 DNS + 内核规则表"场景（app 走公共 DNS，内核学 IP→域名）；fake-ip 场景的
    域名规则由 mihomo 自己的规则引擎处理（内核只需 fake-ip 段 proxy 规则）——两条路都
    不需要改内核判定模型。
+   **v1.4.0 移除域名分流**：前一条路（内核域名规则表）已整模块移除，主线回归纯 IP/UID
+   分流；域名粒度分流统一交给 mihomo（redir-host/fake-ip + 规则引擎），不再维护内核
+   域名 map 与用户态学习器的 ABI/开销。
 
 ## tproxy 模式：技术约束与可选形态（研究结论，暂未实现）
 

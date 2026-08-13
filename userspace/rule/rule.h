@@ -21,7 +21,7 @@ int rule_del(struct split_bpf_ctx *ctx, const char *cidr, int which);
  * add-rule/del-rule 是"对配置基线的运行时偏差"：直接写 map 会被下一次
  * reload（rule_apply_all 先 clear 再写）冲掉。这里记录"期望状态"，让
  * reload 在重放配置基线之后把运行时偏差重放回去，保证 CLI 增删不丢失。
- * 只支持 CIDR 规则（which=RULE_PROXY/DIRECT）；域名规则无 CLI 在线增删。 */
+ * 只支持 CIDR 规则（which=RULE_PROXY/DIRECT）。 */
 #define RULE_OVERRIDE_MAX 64
 
 struct rule_override {

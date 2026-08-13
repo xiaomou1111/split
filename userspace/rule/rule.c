@@ -17,15 +17,6 @@ static void rule_add_list(struct split_bpf_ctx *ctx,
     }
 }
 
-static void dom_add_list(struct split_bpf_ctx *ctx,
-                         const char list[][CFG_STRLEN], int n, int which)
-{
-    for (int k = 0; k < n; k++) {
-        if (map_dom_add(ctx, list[k], which) < 0)
-            LOG_WARNF("域名规则写入失败: %s", list[k]);
-    }
-}
-
 int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
 {
     /* 先清空（幂等：remove 配置中已移除的旧项），再全量写入 */
@@ -41,23 +32,16 @@ int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
     rule_add_list(ctx, cfg->direct4, cfg->ndirect4, RULE_DIRECT);
     rule_add_list(ctx, cfg->direct6, cfg->ndirect6, RULE_DIRECT);
 
-    /* v1.1.0 域名规则（先清空再全量，幂等） */
-    map_dom_clear(ctx);
-    dom_add_list(ctx, cfg->dom_proxy,  cfg->ndom_proxy,  RULE_PROXY);
-    dom_add_list(ctx, cfg->dom_direct, cfg->ndom_direct, RULE_DIRECT);
-
     /* 运行时配置 —— v1.3.1（审查修复）：返回值必须检查。map_cfg 写入失败时
      * 内核会把它当"未初始化"回落到 TUN 安全默认（见 policy.h），但若用户配置
      * 的 default_verdict 就是 direct，静默回落会改变分流语义——显式报错便于排查。 */
     if (map_set_cfg(ctx, cfg->default_verdict, cfg->ipv6_classify ? true : false,
-                    cfg->nskip_uid > 0,
-                    cfg->ndom_proxy > 0 || cfg->ndom_direct > 0) != 0)
+                    cfg->nskip_uid > 0) != 0)
         LOG_ERRORF("map_cfg 写入失败(%s)，内核按 TUN 安全默认运行（default_verdict=%s）",
                    strerror(errno), cfg->default_verdict ? "tun" : "direct");
 
-    LOG_INFOF("rules 已应用: uid=%d proxy4=%d direct4=%d dom_proxy=%d dom_direct=%d",
-              cfg->nskip_uid, cfg->nproxy4, cfg->ndirect4,
-              cfg->ndom_proxy, cfg->ndom_direct);
+    LOG_INFOF("rules 已应用: uid=%d proxy4=%d direct4=%d",
+              cfg->nskip_uid, cfg->nproxy4, cfg->ndirect4);
     return 0;
 }
 

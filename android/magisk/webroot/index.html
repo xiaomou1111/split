@@ -9,7 +9,7 @@
 <body>
 <header class="topbar">
   <h1>eBPF-Split</h1>
-  <span class="pub">内核分流 · CNIP/规则/域名</span>
+  <span class="pub">内核分流 · CNIP/规则</span>
   <span class="pub" id="renderer">—</span>
 </header>
 
@@ -55,17 +55,6 @@
         <div class="status-dot" id="mh-dot" data-on="unknown">未检测</div>
         <p class="hint"><a class="jump" data-tab="logs">查看日志</a> · <a class="jump" data-tab="actions">开关</a></p>
       </div>
-
-      <div class="card">
-        <h2>DNS 学习器（域名分流）</h2>
-        <div class="kv">
-          <span class="k">监听 fd</span><span class="v mono" id="dns-fd">—</span>
-          <span class="k">已学习</span><span class="v mono" id="dns-learned">—</span>
-          <span class="k">跳过</span><span class="v mono" id="dns-skipped">—</span>
-          <span class="k">条目 v4/v6</span><span class="v mono" id="dns-entries">—</span>
-        </div>
-        <p class="hint">域名分流排查看这里：<code>learned</code> 在增长说明 IP→域名映射正在被学习。</p>
-      </div>
     </div>
 
     <div class="card">
@@ -89,7 +78,7 @@
       <div class="stat-grid" id="stats-body"><span class="v dim">暂无数据</span></div>
       <p class="hint">每次轮询对比增量显示 <code>+N/s</code>；绿色=流量在走，红色=异常计数（正常应为 0）。</p>
     </div>
-    <p class="hint">数据来自 <code>splitd</code> 的 Unix socket（<code>splitctl status/stats/dns</code>），需 root 权限。</p>
+    <p class="hint">数据来自 <code>splitd</code> 的 Unix socket（<code>splitctl status/stats</code>），需 root 权限。</p>
   </section>
 
   <!-- ======== 规则 ======== -->

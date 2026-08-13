@@ -60,17 +60,6 @@ rules:
     - 0       # root
     - 2000    # shell
     # - 10142 # mihomo-app 示例
-
-  # 域名规则（v1.1.0；优先级高于下面所有 CIDR 规则与 CNIP）
-  # 原理：splitd 用 AF_PACKET 抓 DNS 响应学习 IP→域名，内核 egress 反查后做
-  # 后缀匹配（Clash DOMAIN-SUFFIX 语义）。支持 "*.example.com"（等价去掉通配）
-  # 与 FQDN 尾点 "example.com."。上限 64 条（CFG_DOM_MAX）。
-  proxy_domains:               # 命中 → 代理（即使 CDN 解析到国内 IP）
-    # - "*.github.com"
-    # - "*.google.com"
-  direct_domains:              # 命中 → 直连（即使 IP 在海外）
-    # - "*.lan"
-    # - "*.internal.example.com"
 ```
 
 > 注意：列表**声明行即覆盖**（"="，非"+="）。声明一个 list 项组会清空该组默认值——
@@ -78,8 +67,6 @@ rules:
 > **v1.2.9 空列表告警**：声明了 `proxy_cidr4/direct_cidr4/proxy_cidr6/direct_cidr6` 但没有任何
 > `- item`（空列表/仅注释）时，默认规则（如 fake-ip 段 `198.18.0.0/15`、内网直连段）会被静默
 > 清空——解析结束打 WARN 点明。若想清空某族（保留空列表）属合法，只看 WARN 确认即可。
-> **域名规则生效前提**：目标域名必须先被 DNS 学习到（首次解析后才有映射、TTL 过期会
-> 重新学习）——首次连接走 IP/CNIP 判定；域名规则不在"学习到"时命中是预期行为。
 
 ## 5. cnip
 
@@ -109,7 +96,7 @@ IPv6:  ::1/128（回环）  fe80::/10（链路本地）  ff00::/8（组播）
 ```
 
 > 直接命中=直连，不查询 CNIP，优先级在 CNIP 之前（判定第 3 步，位于 uid 白名单与
-> v6 开关之后；详见 docs/02 §1.4 的 8 步顺序）。
+> v6 开关之后；详见 docs/02 §1.4 的 7 步顺序）。
 
 ## 7. 与 map 的映射关系
 
@@ -118,11 +105,9 @@ IPv6:  ::1/128（回环）  fe80::/10（链路本地）  ff00::/8（组播）
 | rules.proxy_cidr4/6 | map_rule_proxy4/6 |
 | rules.direct_cidr4/6 | map_rule_direct4/6 |
 | rules.skip_uid | map_skip_uid |
-| rules.proxy_domains / direct_domains（v1.1.0） | map_dom_proxy / map_dom_direct（反转+小写，LPM key） |
 | cnip.path_v4/6 | map_cnip4/6 |
 | default.verdict / default.ipv6 | map_cfg[0]（default_verdict / ipv6_classify） |
 | tun_device | map_tun[0]（启动时解析；运行期由 daemon `tun_sync` 持续对齐——mihomo 重建 utun（含重载配置文件）导致 ifindex 漂移/改名时自动重写，接口消失时置 0 放行保联网，见 docs/02 §2.4） |
-| （无配置项，运行时由学习器写入） | map_dns4/6（IP→域名，TTL 过期自动失效） |
 
 ## 8. 热重载
 

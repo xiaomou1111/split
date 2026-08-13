@@ -7,7 +7,6 @@
 # 用法: webuiapi.sh <action> [args...]
 #   status                 → status 文本（或 splitd 未运行提示）
 #   stats                  → stats 文本
-#   dns                    → splitctl dns（域名学习器状态，v1.2.2）
 #   list-rules             → 当前在线规则（proxy/direct 行，v1.2.2）
 #   version                → SPLIT_VERSION=...（打包时注入，仓库副本回退 dev）
 #   start                  → 后台派生 splitd 并回 status
@@ -185,7 +184,6 @@ save_config() {
 case "$ACTION" in
   status)     run status ;;
   stats)      run stats ;;
-  dns)        run dns ;;
   list-rules) run list-rules ;;
   version)    echo "SPLIT_VERSION=$SPLIT_VERSION" ;;
   start)

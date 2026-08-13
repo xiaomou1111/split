@@ -17,7 +17,6 @@
 
 #define CFG_STRLEN 128
 #define CFG_LIST_MAX 16
-#define CFG_DOM_MAX 64   /* 域名规则列表上限（内核 dom map 容量 8192 远大于此） */
 
 struct split_config {
     int  debug;
@@ -40,10 +39,6 @@ struct split_config {
     char direct4[CFG_LIST_MAX][CFG_STRLEN]; int ndirect4;
     char direct6[CFG_LIST_MAX][CFG_STRLEN]; int ndirect6;
     uint32_t skip_uid[CFG_LIST_MAX];        int nskip_uid;
-
-    /* 域名规则（v1.1.0：DNS 学习 + 后缀匹配，优先级高于 IP 段规则） */
-    char dom_proxy[CFG_DOM_MAX][CFG_STRLEN];  int ndom_proxy;
-    char dom_direct[CFG_DOM_MAX][CFG_STRLEN]; int ndom_direct;
 
     /* cnip */
     char cnip4_path[CFG_STRLEN];

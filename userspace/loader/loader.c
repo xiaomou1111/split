@@ -70,16 +70,10 @@ int split_load(struct split_bpf_ctx *ctx, const char *obj_path)
     ctx->m_tun = map_by_name(ctx->obj, "map_tun");
     ctx->m_cfg = map_by_name(ctx->obj, "map_cfg");
     ctx->m_stats = map_by_name(ctx->obj, "map_stats");
-    ctx->m_dns4 = map_by_name(ctx->obj, "map_dns4");
-    ctx->m_dns6 = map_by_name(ctx->obj, "map_dns6");
-    ctx->m_dom_proxy = map_by_name(ctx->obj, "map_dom_proxy");
-    ctx->m_dom_direct = map_by_name(ctx->obj, "map_dom_direct");
     ctx->m_rawip = map_by_name(ctx->obj, "map_rawip");
     if (!ctx->m_cnip4 || !ctx->m_cnip6 || !ctx->m_proxy4 || !ctx->m_proxy6 ||
         !ctx->m_direct4 || !ctx->m_direct6 || !ctx->m_skip_uid ||
-        !ctx->m_tun || !ctx->m_cfg || !ctx->m_stats ||
-        !ctx->m_dns4 || !ctx->m_dns6 ||
-        !ctx->m_dom_proxy || !ctx->m_dom_direct || !ctx->m_rawip)
+        !ctx->m_tun || !ctx->m_cfg || !ctx->m_stats || !ctx->m_rawip)
         goto fail;
 
     LOG_INFOF("加载成功 prog_fd=%d", ctx->prog_fd);
@@ -398,7 +392,7 @@ int map_get_tun(struct split_bpf_ctx *ctx, uint32_t *ifindex)
 }
 
 int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on,
-                bool skip_uid_on, bool dom_on)
+                bool skip_uid_on)
 {
     uint32_t zero = 0;
     struct split_cfg cfg = {
@@ -410,7 +404,6 @@ int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on
         .bpf_trace_enabled = 1,
         .ipv6_classify = ipv6_on ? 1 : 0,
         .skip_uid_enabled = skip_uid_on ? 1 : 0,
-        .dom_enabled = dom_on ? 1 : 0,
     };
 
     return bpf_map__update_elem(ctx->m_cfg, &zero, sizeof(zero),
@@ -441,7 +434,7 @@ int map_skip_uid_del(struct split_bpf_ctx *ctx, uint32_t uid)
  */
 static int map_clear_by_keys(struct bpf_map *m)
 {
-    unsigned char cur[128]; /* ≥ 所有 map 的 key 大小（最大 dom_key=4+64=68） */
+    unsigned char cur[128]; /* ≥ 所有 map 的 key 大小（最大 lpm_key6=4+16=20） */
     size_t ksz = bpf_map__key_size(m);
 
     if (ksz == 0 || ksz > sizeof(cur))
@@ -486,7 +479,7 @@ int map_cnip_clear_all(struct split_bpf_ctx *ctx)
  * 注意：与 map_clear_by_keys 不同——这里**不删除**键，LPM_TRIE 的
  * get_next_key(prev) 迭代稳定，不会提前终止；因此用 prev-key 顺序遍历
  * （若复用"反复取首键"方式且不删键，会永远取到同一个首键 → 死循环）。
- * 风格与 map_dns_count 一致（key/next 双缓冲，err==0 才拷贝）。
+ * 用 prev-key 顺序遍历（key/next 双缓冲，err==0 才拷贝）。
  */
 int map_cnip_count(struct split_bpf_ctx *ctx, uint32_t *n4, uint32_t *n6)
 {
@@ -519,194 +512,6 @@ int map_cnip_count(struct split_bpf_ctx *ctx, uint32_t *n4, uint32_t *n6)
             err = bpf_map__get_next_key(ctx->m_cnip6, key, next, ksz);
             if (err == 0)
                 memcpy(key, next, ksz);
-        }
-    }
-    if (n4)
-        *n4 = c4;
-    if (n6)
-        *n6 = c6;
-    return 0;
-}
-
-/* ================= v1.1.0 域名分流 ================= */
-
-/*
- * domain → 反转 + 小写（与内核 dom.h 的字节序硬契约一致）。
- * 支持：
- *   - 前导通配 "*.example.com" → 按 "example.com"（DOMAIN-SUFFIX 语义）
- *   - FQDN 尾点 "example.com." → 按 "example.com"
- * 拒绝：空、非法字符（仅 a-z0-9._-）、反转后 > SPLIT_DOM_MAX 字节。
- */
-static int domain_to_rev(const char *domain, uint8_t rev[SPLIT_DOM_MAX],
-                         uint8_t *len_out)
-{
-    char buf[128]; /* 与 CFG_STRLEN 一致；loader 不依赖 common/config.h */
-    size_t n, i;
-
-    snprintf(buf, sizeof(buf), "%s", domain);
-    n = strlen(buf);
-    while (n > 0 && buf[n - 1] == '.')
-        n--; /* 去尾点（FQDN） */
-    if (n >= 2 && buf[0] == '*' && buf[1] == '.') {
-        memmove(buf, buf + 2, n - 2); /* 去 "*.",DOMAIN-SUFFIX 语义 */
-        n -= 2;
-        buf[n] = '\0'; /* memmove 不拷贝 NUL：显式截断，防尾部残留脏字节 */
-    }
-    if (n == 0 || n > SPLIT_DOM_MAX)
-        return -1;
-    for (i = 0; i < n; i++) {
-        char c = buf[i];
-
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'))
-            return -1;
-    }
-    for (i = 0; i < n; i++) {
-        char c = buf[n - 1 - i];
-
-        rev[i] = (c >= 'A' && c <= 'Z') ? (uint8_t)(c - 'A' + 'a') : (uint8_t)c;
-    }
-    *len_out = (uint8_t)n;
-    return 0;
-}
-
-int map_dom_add(struct split_bpf_ctx *ctx, const char *domain, int which)
-{
-    /* which: 0=proxy 1=direct（与 rule.h 的 RULE_PROXY/RULE_DIRECT 一致；
-     * loader 不 include rule.h 以避免循环依赖） */
-    struct bpf_map *m;
-    struct dom_key k = {0};
-    struct dom_rule v = {0};
-    uint8_t rev[SPLIT_DOM_MAX];
-    uint8_t len;
-    int err;
-
-    if (which != 0 && which != 1)
-        return -1;
-    m = (which == 0) ? ctx->m_dom_proxy : ctx->m_dom_direct;
-    if (!m)
-        return -1;
-    if (domain_to_rev(domain, rev, &len) < 0) {
-        LOG_ERRORF("非法域名规则 %s（仅 a-z0-9._-，且 ≤%d 字节）",
-                   domain, SPLIT_DOM_MAX);
-        return -1;
-    }
-    memcpy(k.data, rev, len);
-    k.prefixlen = (uint32_t)len * 8;
-    v.len = len;
-    err = bpf_map__update_elem(m, &k, sizeof(k), &v, sizeof(v), BPF_ANY);
-    if (err)
-        LOG_ERRORF("写入域名规则失败 %s(%s)", domain, strerror(errno));
-    return err;
-}
-
-int map_dom_del(struct split_bpf_ctx *ctx, const char *domain, int which)
-{
-    struct bpf_map *m;
-    struct dom_key k = {0};
-    uint8_t rev[SPLIT_DOM_MAX];
-    uint8_t len;
-    int err;
-
-    if (which != 0 && which != 1)
-        return -1;
-    m = (which == 0) ? ctx->m_dom_proxy : ctx->m_dom_direct;
-    if (!m)
-        return -1;
-    if (domain_to_rev(domain, rev, &len) < 0)
-        return -1;
-    memcpy(k.data, rev, len);
-    k.prefixlen = (uint32_t)len * 8;
-    err = bpf_map__delete_elem(m, &k, sizeof(k), 0);
-    if (err)
-        LOG_ERRORF("删除域名规则失败 %s(%s)", domain, strerror(errno));
-    return err;
-}
-
-int map_dom_clear(struct split_bpf_ctx *ctx)
-{
-    map_clear_by_keys(ctx->m_dom_proxy);
-    map_clear_by_keys(ctx->m_dom_direct);
-    return 0;
-}
-
-int map_dns_set(struct split_bpf_ctx *ctx, int family, const void *ip,
-                const char *name_rev, int len, uint64_t expire_ns)
-{
-    struct bpf_map *m = (family == AF_INET) ? ctx->m_dns4 : ctx->m_dns6;
-    struct dns_entry v = {0};
-    size_t ksz;
-
-    if (!m || !ip || !name_rev)
-        return -1;
-    if (len <= 0 || len > SPLIT_DOM_MAX)
-        return -1;
-    v.expire_ns = expire_ns;
-    v.name_len = (uint8_t)len;
-    memcpy(v.name, name_rev, (size_t)len);
-    ksz = (family == AF_INET) ? 4 : 16;
-    return bpf_map__update_elem(m, ip, ksz, &v, sizeof(v), BPF_ANY);
-}
-
-int map_dns_prune(struct split_bpf_ctx *ctx, uint64_t now_ns)
-{
-    struct bpf_map *maps[2] = { ctx->m_dns4, ctx->m_dns6 };
-    size_t ksizes[2] = { 4, 16 };
-    unsigned char key[16], next[16];
-    struct dns_entry v;
-    int total = 0, m;
-
-    for (m = 0; m < 2; m++) {
-        int err;
-
-        if (!maps[m])
-            continue;
-        /* HASH 迭代必须"取下一个键"前进——不能像清空那样每轮 get_next_key(NULL)
-         * （那要求每轮都删除到空为止）；这里只删过期的，不删的条目会让
-         * get_next_key(NULL) 永远返回同一首键 → 死循环。 */
-        err = bpf_map__get_next_key(maps[m], NULL, key, ksizes[m]);
-        while (err == 0) {
-            int expired = 0;
-
-            if (bpf_map__lookup_elem(maps[m], key, ksizes[m],
-                                     &v, sizeof(v), 0) == 0 &&
-                v.expire_ns != 0 && v.expire_ns < now_ns)
-                expired = 1;
-            err = bpf_map__get_next_key(maps[m], key, next, ksizes[m]);
-            if (expired) {
-                if (bpf_map__delete_elem(maps[m], key, ksizes[m], 0) == 0)
-                    total++;
-            }
-            if (err == 0)
-                memcpy(key, next, ksizes[m]);
-        }
-    }
-    return total;
-}
-
-int map_dns_count(struct split_bpf_ctx *ctx, uint32_t *n4, uint32_t *n6)
-{
-    unsigned char key[16], next[16];
-    uint32_t c4 = 0, c6 = 0;
-
-    if (ctx->m_dns4) {
-        int err = bpf_map__get_next_key(ctx->m_dns4, NULL, key, 4);
-
-        while (err == 0) {
-            c4++;
-            err = bpf_map__get_next_key(ctx->m_dns4, key, next, 4);
-            if (err == 0)
-                memcpy(key, next, 4);
-        }
-    }
-    if (ctx->m_dns6) {
-        int err = bpf_map__get_next_key(ctx->m_dns6, NULL, key, 16);
-
-        while (err == 0) {
-            c6++;
-            err = bpf_map__get_next_key(ctx->m_dns6, key, next, 16);
-            if (err == 0)
-                memcpy(key, next, 16);
         }
     }
     if (n4)
