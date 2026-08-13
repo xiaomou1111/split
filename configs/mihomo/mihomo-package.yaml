@@ -24,10 +24,10 @@ tcp-concurrent: true
 log-level: silent
 find-process-mode: always
 global-client-fingerprint: chrome
-external-controller: 0.0.0.0:9090 # 切勿修改端口会影响状态栏磁贴
+external-controller: 127.0.0.1:9090 # 绑定回环，防局域网探测/操控（原 0.0.0.0 会把控制 API 暴露到 LAN）；端口勿改，状态栏磁贴依赖
 external-ui-url: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
 external-ui: "./Web/Zash/"
-secret: "" # 面板访问密码，如在公网访问建议设置
+secret: "" # 控制 API 访问密码；建议设一个随机值（watchdog 自愈会自动读取并带 Bearer 鉴权，见 split-watchdog.sh）
 # —————————
 # ==== Tips
 

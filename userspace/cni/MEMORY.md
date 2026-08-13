@@ -20,10 +20,16 @@
    **v1.1.9：仅配置单族 path 时显式 `LOG_WARNF` 点明另一族将被清空**——"全量替换"契约
    语义下单族配置会让未配置族清零，配置不完整时不再静默。
 2. **清 map 的实现注意**：`map_cnip_clear` 走 loader 的 `map_clear_by_keys`，用"反复取首键（key=NULL）+ delete"直到 `-ENOENT`；**不能沿用前一个键继续迭代**——被删键在 LPM_TRIE 里已不存在，`get_next_key` 会提前 -ENOENT（见 loader/MEMORY.md）。
-3. **无网络库**：`cnip_load_url` 用 `fork + execlp("curl",...)`（**v1.2.8 由 `system()` 改造**——
+3. **无网络库**：`cnip_load_url` 用 `fork + exec`（**v1.2.8 由 `system()` 改造**——
    参数原样传给 execve 无 shell 解释，URL 中 `;`/`$()`/反引号等元字符不再有注入面；curl 缺失时
    子进程 _exit(127) 由 waitpid 收回报错）。安卓上**未必有 curl**（Magisk 环境一般不装）→ 手机端
    建议本地放置 cnip 文件或换 wget；这是已知缺口（docs/03、06 已提）。
+   **审查修复（2026-08）：curl 路径解析改"绝对路径优先"**——旧 `execlp("curl")` 依赖 PATH，
+   下载子进程以 root 运行，daemon 启动环境（Magisk service / WSL2 / systemd）的 PATH 若含
+   可写目录（如 /data/local/tmp）可被预置同名二进制替换成 root 代码执行。现 `cnip_find_curl()`
+   探测常见绝对路径（/system/bin /system/xbin /data/adb/split/bin /usr/bin /bin），全部缺失
+   才回落 PATH 并 `LOG_WARNF`。**在 fork 前（父进程）调用一次**，子进程继承结果 `execl`；
+   残余 TOCTOU 可忽略（能写 /usr/bin 等位置者本已控设备）。
    **v1.2.9（审查加固）：exec curl 前对继承的全部非标准 fd 置 `FD_CLOEXEC`**——本进程（daemon
    派生的 CNIP 更新子进程）持有 BPF map fd / ctl listen / netlink watch，curl exec 后继承即脏现场。
    循环 `for (fd=3; fd<256; fd++) fcntl(fd, F_SETFD, FD_CLOEXEC)`（对不存在的 fd F_SETFD 返回 -1 无害；

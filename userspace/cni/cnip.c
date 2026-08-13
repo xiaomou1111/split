@@ -90,16 +90,40 @@ int cnip_load_file(struct split_bpf_ctx *ctx, const char *path, int family)
     return cnip_from_path(ctx, path, family);
 }
 
+/* 审查修复（2026-08 全库审查批次）：CNIP 下载子进程以 root 运行，旧实现 execlp("curl")
+ * 依赖 PATH 查找可执行文件——若 daemon 启动环境（Magisk service / WSL2 / systemd）的
+ * PATH 含用户可写目录（如 Android /data/local/tmp），可被预置同名二进制替换成 root 代码
+ * 执行。改为优先探测常见绝对路径，全部缺失才回落 PATH（并告警，提示把 curl 放到
+ * /data/adb/split/bin/curl）。须在 fork 前（父进程）调用一次，结果由子进程继承 exec。 */
+static const char *cnip_find_curl(void)
+{
+    static const char *const cand[] = {
+        "/system/bin/curl",
+        "/system/xbin/curl",
+        "/data/adb/split/bin/curl",
+        "/usr/bin/curl",
+        "/bin/curl",
+    };
+    for (size_t i = 0; i < sizeof(cand) / sizeof(cand[0]); i++) {
+        if (access(cand[i], X_OK) == 0)
+            return cand[i];
+    }
+    LOG_WARNF("未找到常见路径下的 curl，回落 PATH 查找（PATH 可写时存在被替换风险）");
+    return "curl";
+}
+
 int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
                   const char *tmp_path, int family)
 {
     pid_t pid;
     int st = 0;
 
-    /* v1.2.8（审查修复）：弃用 system()（shell 拼接注入面），改 fork + execlp
-     * 直接 exec curl——参数原样传给 execve，无 shell 解释，URL 中任何元字符
-     * （`;` `$()` 反引号等）都只是 curl 的普通参数。curl 不存在/不可执行时子进程
-     * _exit(127)，由 waitpid 收回并报错。 */
+    /* v1.2.8（审查修复）：弃用 system()（shell 拼接注入面），改 fork + exec 直接跑
+     * curl——参数原样传给 execve，无 shell 解释，URL 中任何元字符（`;` `$()` 反引号等）
+     * 都只是 curl 的普通参数。curl 不存在/不可执行时子进程 _exit(127)，由 waitpid 收回
+     * 并报错。审查修复（2026-08 全库审查批次）：exec 用绝对路径（见 cnip_find_curl），
+     * 消除对可写 PATH 的依赖。 */
+    const char *curl_path = cnip_find_curl();
     if (strchr(url, '\'') || strchr(tmp_path, '\'')) {
         LOG_ERRORF("拒绝含单引号的 URL: %s", url);
         return -1;
@@ -117,9 +141,9 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
          * exec 时生效，不影响本进程 exec 前/后续灌 CNIP 对 map fd 的使用。 */
         for (int fd = 3; fd < 256; fd++)
             fcntl(fd, F_SETFD, FD_CLOEXEC);
-        execlp("curl", "curl", "-L", "--max-time", "60", "-s",
-               "-o", tmp_path, url, (char *)NULL);
-        /* 只有 exec 失败才到这里（curl 不在 PATH/不可执行） */
+        execl(curl_path, "curl", "-L", "--max-time", "60", "-s",
+              "-o", tmp_path, url, (char *)NULL);
+        /* 只有 exec 失败才到这里（curl 不存在/不可执行） */
         _exit(127);
     }
     /* EINTR 重试：daemon 的信号处理只置 g_stop，SIGINT/SIGTERM 会中断 waitpid

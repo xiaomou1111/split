@@ -34,6 +34,18 @@ export SPLIT_SOCKET="$RUN_DIR/splitd.sock"
 
 log() { echo "[wd] $(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
+# mihomo 全重启（API 自愈失败后的兜底）：kill + fix-mihomo-tun.sh 对齐契约 + 重新拉起
+# （从 API 分支抽成函数，供"带鉴权/不带鉴权"两条 PATCH 路径共用，避免重复块）。
+restart_mihomo() {
+  log "mihomo API 恢复失败，重启 mihomo"
+  pkill -f "$BIN_DIR/mihomo" 2>/dev/null
+  sleep 2
+  if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ] && [ -f "$INSTALL_DIR/mihomo/config.yaml" ]; then
+    "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" >> "$LOG" 2>&1 || true
+  fi
+  "$BIN_DIR/mihomo" -d "$INSTALL_DIR/mihomo" >> "$LOG_DIR/mihomo.log" 2>&1 &
+}
+
 # 单实例：杀掉其它正在跑的本脚本（含上一次启动残留），排除自身（$$）
 for p in $(pgrep -f "split-watchdog.sh" 2>/dev/null); do
   [ "$p" != "$$" ] && kill "$p" 2>/dev/null
@@ -79,15 +91,19 @@ while :; do
           log "splitd 存活但 map_tun=0（mihomo TUN 消失），尝试恢复 mihomo TUN"
           # 恢复优先级：先经 mihomo 外部控制器把 tun.enable 拉回 true（无感、不丢连接）；
           # API 不可达/失败再重启 mihomo（断开但保证重建 utun）。
-          if ! curl -s -m 3 -X PATCH http://127.0.0.1:9090/configs \
-               -d '{"tun":{"enable":true}}' >/dev/null 2>&1; then
-            log "mihomo API 恢复失败，重启 mihomo"
-            pkill -f "$BIN_DIR/mihomo" 2>/dev/null
-            sleep 2
-            if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ] && [ -f "$INSTALL_DIR/mihomo/config.yaml" ]; then
-              "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" >> "$LOG" 2>&1 || true
-            fi
-            "$BIN_DIR/mihomo" -d "$INSTALL_DIR/mihomo" >> "$LOG_DIR/mihomo.log" 2>&1 &
+          # 审查修复（2026-08 全库审查批次）：mihomo 配了 secret 时 PATCH 必须带 Bearer
+          # 鉴权，否则 401 被误判为"API 不可达"而多余重启（断连）；读不到/为空 → 按旧逻辑
+          # 不带鉴权。读取只做简单 sed 清洗（去引号/行内注释），secret 含特殊字符时提取
+          # 失败只会 401 → 自然落到 restart_mihomo 兜底，不会误动作。
+          _sec="$(sed -n 's/^[[:space:]]*secret:[[:space:]]*\(.*\)/\1/p' "$INSTALL_DIR/mihomo/config.yaml" 2>/dev/null | head -n1)"
+          _sec="$(printf '%s' "$_sec" | sed -e 's/^[[:space:]]*//;s/["'\'']//g;s/[[:space:]]*#.*$//;s/[[:space:]]*$//')"
+          if [ -n "$_sec" ]; then
+            curl -s -m 3 -X PATCH http://127.0.0.1:9090/configs \
+                 -H "Authorization: Bearer $_sec" \
+                 -d '{"tun":{"enable":true}}' >/dev/null 2>&1 || restart_mihomo
+          else
+            curl -s -m 3 -X PATCH http://127.0.0.1:9090/configs \
+                 -d '{"tun":{"enable":true}}' >/dev/null 2>&1 || restart_mihomo
           fi
           # 恢复动作后 5 分钟冷却，防 API 拉了又被外部关掉导致循环重启
           mihomo_recover_ts=$((now + 300))

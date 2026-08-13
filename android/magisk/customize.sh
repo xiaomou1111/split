@@ -41,7 +41,12 @@ fi
 
 # 配置（含默认值 + 用户可改）
 mkdir -p "$INSTALL_DIR/config"
-cp "$MODPATH/config/split.yaml" "$INSTALL_DIR/config/split.yaml" 2>/dev/null || true
+# 升级保护（审查修复，2026-08 全库审查批次）：只在首次安装铺默认 split.yaml。
+# 旧实现无条件 cp，模块每次升级都会用打包默认值覆盖用户改过的自定义规则
+# （P0：静默丢用户配置）。口径与下方 mihomo config 的 [ ! -f ] 保护一致。
+if [ ! -f "$INSTALL_DIR/config/split.yaml" ]; then
+  cp "$MODPATH/config/split.yaml" "$INSTALL_DIR/config/split.yaml" 2>/dev/null || true
+fi
 
 # 辅助脚本（start/stop/check-kernel/setup-box-tun）
 if [ -d "$MODPATH/scripts" ]; then
