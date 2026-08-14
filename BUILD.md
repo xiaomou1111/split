@@ -25,16 +25,24 @@
 ```bash
 # 一键安装全部构建依赖（含 arm64 交叉工具链与 multiarch 链接库，等价下面全部）：
 sudo make prepare
-# 或手动：
+# 或手动（multiarch 源已就绪时）：
 sudo dpkg --add-architecture arm64
 sudo apt update
-sudo apt install clang llvm libbpf-dev libelf-dev bpftool zip curl \
+sudo apt install clang llvm libbpf-dev libelf-dev zip curl \
                  zlib1g-dev libzstd-dev liblzma-dev libbz2-dev \
                  gcc-aarch64-linux-gnu
 # arm64 交叉链接库（build_arm64 需要）：
 sudo apt install libelf-dev:arm64 zlib1g-dev:arm64 \
                  libzstd-dev:arm64 liblzma-dev:arm64 libbz2-dev:arm64
 ```
+> **Ubuntu multiarch 源（v1.4.5，WSL2/24.04 实测）**：Ubuntu 的 `archive.ubuntu.com` /
+> `security.ubuntu.com` 只发布 amd64/i386，**不发布 binary-arm64**（arm64 包只在
+> `ports.ubuntu.com`）。裸 `dpkg --add-architecture arm64` 后 `apt update` 会对 native 源
+> 请求 arm64 包 → **HTTP 404 直接失败**。`make prepare` 已内置 `scripts/ensure-arm64-source.sh`
+> 幂等修复：native 源显式限 `Architectures: amd64` + 追加 ports arm64 源；手动搭环境时
+> 先跑一次 `sudo ./scripts/ensure-arm64-source.sh`。Debian 无此问题（deb.debian.org 全架构同源）。
+> **bpftool（可选，仅 `make -C kernel validate/disasm`）**：Ubuntu 24.04 无独立候选包，
+> 需要时装 `linux-tools-common`。
 > 注：用户态链接库清单 `-lbpf -lelf -lz -lzstd -llzma -lbz2` 在
 > `userspace/Makefile` 的 `LIBS`（唯一真源），`scripts/build_arm64.sh` 通过
 > `make print-libs` 读取，两边不会不一致。
@@ -186,6 +194,8 @@ adb shell "... splitctl stats"                             # 看 direct_cn/proxy
 | 原生 `make userspace` 报缺 `-lzstd/-llzma/-lbz2` | `sudo make prepare`（或 `apt install libzstd-dev liblzma-dev libbz2-dev`） |
 | 真机加载 `BPF_STX uses reserved fields` | 确认 `-mcpu=v1` |
 | arm64 链接报 libelf 缺失 | `apt install libelf-dev:arm64`（multiarch） |
+| Ubuntu 上 `apt update` 报 `archive.ubuntu.com` 404 / binary-arm64 | `sudo ./scripts/ensure-arm64-source.sh` 后重试（make prepare 已内置） |
+| `apt install bpftool` 无候选包（24.04） | 可选包，仅 validate 用；装 `linux-tools-common` 或跳过 |
 | gen-magisk.sh 报 zip 目录错误 | 确认 `zip` 已装；脚本已修 `mkdir -p "$(dirname)"` |
 | 打包没 mihomo | 把 mihomo 放 build/arm64/mihomo |
 | 构建区被 WSL 清 | libbpf 放 /root（持久），勿放 /tmp |

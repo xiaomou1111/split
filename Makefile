@@ -33,14 +33,16 @@ arm64:
 	./scripts/build_arm64.sh $(LIBBPF)
 
 prepare:
+	./scripts/ensure-arm64-source.sh   # Ubuntu: native 源限 amd64 + 追加 ports arm64（幂等）
 	dpkg --add-architecture arm64
 	apt-get update
-	apt-get install -y clang llvm libbpf-dev libelf-dev bpftool \
+	apt-get install -y clang llvm libbpf-dev libelf-dev \
 	    iproute2 curl wget jq ca-certificates file zip \
 	    zlib1g-dev libzstd-dev liblzma-dev libbz2-dev \
 	    gcc-aarch64-linux-gnu \
 	    libelf-dev:arm64 zlib1g-dev:arm64 \
 	    libzstd-dev:arm64 liblzma-dev:arm64 libbz2-dev:arm64
+	@echo "提示: bpftool（仅 make -C kernel validate/disasm 可选）在 Ubuntu 24.04 无独立候选包，需要时装 linux-tools-common"
 
 install: all
 	mkdir -p /etc/split

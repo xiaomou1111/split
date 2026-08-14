@@ -21,6 +21,22 @@
   守卫补 cBPF 定义；**v1.2.7 移除 dns 学习器 cBPF filter、v1.4.0 整模块移除后该坑不复存在**
   （勿回退——`userspace/dns/` 已删除，引回该模块即重新引入此坑）。
 
+## ensure-arm64-source.sh（v1.4.5 新增）
+- **坑（WSL2/Ubuntu 24.04 实测）**：Ubuntu 的 `archive.ubuntu.com` / `security.ubuntu.com` 只发布
+  amd64/i386，**不发布 binary-arm64**（arm64 包只在 `ports.ubuntu.com/ubuntu-ports`）。源配置若没按
+  架构拆分，`dpkg --add-architecture arm64` 后 `apt-get update` 会对 native 源请求 arm64 包 → **HTTP
+  404 直接失败**，`make prepare` 在文档指定环境（Ubuntu 24.04）是坏的。Debian 无此问题（deb.debian.org
+  全架构同源），脚本检测到即跳过。
+- **修复**：幂等——① 给 native 源（archive/security.ubuntu.com）的 stanza/行显式限 `amd64`；
+  ② 追加 ports.ubuntu.com 的 arm64 源（套用 /etc/os-release 的 VERSION_CODENAME）。已含
+  `ports.ubuntu.com` 则跳过；非 Ubuntu 源不动。支持 deb822（ubuntu.sources，24.04+）与 legacy
+  （sources.list，<24.04）两种格式；`make prepare` 已调用，手动搭环境时先跑一次再 apt update。
+- **注意**：必须 `./scripts/ensure-arm64-source.sh` → `dpkg --add-architecture arm64` → `apt-get
+  update` 的顺序（先修源再加架构，否则 update 仍会 404）。本脚本只修源，不跑 update。
+- **bpftool（v1.4.5 从 prepare 移除）**：Ubuntu 24.04 无独立候选包（虚拟包），仅 `make -C kernel
+  validate/disasm` 可选使用；kernel/Makefile 的 `BPFTOOL ?= bpftool` 保持默认，需要时装
+  `linux-tools-common`。勿把 bpftool 加回 prepare 的 apt-get install 清单。
+
 ## load-debug.sh
 - 宿主机（Linux）调试加载：先挂 clsact 再 attach 到主出口网卡（一般 `lo` 或主网卡），用于无 daemon 时快速验证。
 - **v1.0.6 新增 `del` 模式**：`sudo ./scripts/load-debug.sh del` 卸载（tc filter del + qdisc del），
