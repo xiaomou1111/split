@@ -60,6 +60,22 @@
   (b) `default: ipv6=false` 时 policy 第 2 步短路，proxy_cidr6/direct_cidr6/CNIP6 全不生效——
   `!ipv6_classify && nproxy6>0` 即 WARN（proxy6 是"意图相反"的真冲突；direct6/CNIP6 结果仍直连、
   属冗余不告警）。两处均为解析期提示，不改裁决语义。
+- 坑 13（v1.4.6 审查 P3 批次，5 项——诊断/宽容性为主，格式合法配置零行为变化）：
+  1. **skip_uid 空列表清默认（root/shell）无 WARN → 补**：声明 skip_uid 会清零 config_defaults 种下的
+     `[0(root),2000(shell)]`，空列表时被静默清掉。解析结束 `declared_skip_uid && nskip_uid==0` 即 WARN。
+     只对空列表告警——非空声明是显式列 UID 的常规用法，不再多告警（区别于 direct 非空告警的
+     "只加一条丢其它"脚枪，skip_uid 常整体替换）。
+  2. **长行拆断 / 超长值截断静默 → 检出**：`line[512]` 的 fgets 对 >511 字符行拆成两半、剩余被当
+     新行解析（静默错位）——缓冲满且末尾无 `\n` 时 WARN 并排干该行剩余；`CFG_STRLEN=256` 的
+     snprintf 对超长值静默截断（截断后 CIDR inet_pton 失败、URL 下载失败但原因归到别处）——
+     新增 `set_str_checked()` 覆盖 tun_device / cnip path_v4|6 / url_v4|6 与全部列表项（add_str）。
+  3. **`key : value` 冒号前带空格 → trim**：`debug : true`/`proxy_cidr4 :` 此前 key 留尾空格静默
+     不匹配报"未知 key"，拆 key 后补 `str_trim_tail(p)`；顶层空 key（冒号前空）补"缺少 key"提示。
+  4. **孤儿 `- item`（未声明任何列表 key）→ WARN**：此前 cur_list==0 时静默丢弃，用户以为加了规则
+     实际没生效。未知 key 复位 cur_list（坑 2/v1.3.1）后紧随的 `- item` 同样落入此告警。
+  5. **顶层 key 误放节内 → 专用提示**：debug/tun_device 放节内（如 `rules:` 下）此前报通用
+     "未知 key"误导（用户以为已生效）——`section_unknown_key_warn` 识别顶层 key 点明"请移到
+     文件顶部"；attach_auto 另合法于 ifaces 节，单独说明。未知 key 仍走原 WARN。
 
 ## netlink — 接口发现/监听（不依赖 iproute2）
 - `iface_scan`：RTM_GETLINK + NLM_F_DUMP，解析 IFLA_IFNAME；**只取名字+ifindex+type+flags**，无 mac/addr。

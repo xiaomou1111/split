@@ -105,6 +105,10 @@ v1.4.6（当前）        2026-08-15 全库再审查 P2 修复批（7 项，详�
                       ⑤cnip 下载校验改 dry-run——rename 失败时不再出现 map≠file 残留
                       ⑥docs/04 verdict 示例去引号（解析器不剥引号，带引号会 WARN 回落）
                       ⑦"url 留空=周期重读本地"虚假声明纠偏（实为自动更新对该族空转）
+                      ⑧config.c P3 解析健壮性批次（5 项，纯诊断+宽容性，详见 common/MEMORY 坑 13）：
+                        skip_uid 空列表清默认 root/shell 补 WARN；长行 fgets 拆断+>255 截断检出；
+                        `key : value` 冒号前空格 trim；孤儿 `- item` WARN；顶层 key 误放节内
+                        点明"请移到文件顶部"
 v1.4.5        DEBUG 日志补全（纯增量，无行为/契约变更；debug:true 下可见更多过程细节）：
                       ①loader：map 打开成功/失败明细、加载成功附带 split/libbpf 版本
                       ②cnip：下载器识别（curl/wget）、每源下载耗时、混合文件按族加载跳过行数

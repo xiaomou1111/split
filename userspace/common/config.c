@@ -146,12 +146,42 @@ static int is_section(const char *p, const char *name)
            p[n + 1] == ' ' || p[n + 1] == '\t';
 }
 
+/* 拷贝配置值并检出截断（P3 #3）：CFG_STRLEN=256，超长值被 snprintf 静默截断会让
+ * CIDR/URL/路径下游解析失败且无提示（截断后的 CIDR inet_pton 失败、URL 下载失败但
+ * 原因归到别处）。解析期显式 WARN，点明"值太长被截断"。 */
+static void set_str_checked(char out[CFG_STRLEN], const char *what, const char *v)
+{
+    int n = snprintf(out, CFG_STRLEN, "%s", v);
+
+    if (n >= CFG_STRLEN)
+        LOG_WARNF("配置 %s 值超长（%d>%d）已截断: %.40s…", what, n, CFG_STRLEN - 1, v);
+}
+
 static void add_str(char list[][CFG_STRLEN], int *n, const char *v)
 {
     if (*n >= CFG_LIST_MAX)
         return;
-    snprintf(list[*n], CFG_STRLEN, "%s", v);
+    set_str_checked(list[*n], "列表项", v);
     (*n)++;
+}
+
+/* 节内未知 key 告警（P3 #12）：顶层 key（debug/tun_device/attach_auto）只能放文件顶部，
+ * 若出现在节内，通用"未知 key"信息会误导（用户以为 debug 已生效）。识别出顶层 key 时
+ * 点明正确位置；attach_auto 另合法于 ifaces 节，单独说明。 */
+static void section_unknown_key_warn(int section, const char *key)
+{
+    const char *secname = section == S_IFACES ? "ifaces" :
+                          section == S_DEFAULT ? "default" :
+                          section == S_RULES ? "rules" : "cnip";
+
+    if (strcmp(key, "attach_auto") == 0)
+        LOG_WARNF("%s 下配置 attach_auto 仅支持顶层或 ifaces 节（当前节不支持，已忽略）"
+                  "——如需精确挂载请写在 ifaces 节或文件顶部", secname);
+    else if (strcmp(key, "debug") == 0 || strcmp(key, "tun_device") == 0)
+        LOG_WARNF("%s 下配置 %s 是顶层 key，节内不支持（已忽略）——请移到文件顶部",
+                  secname, key);
+    else
+        LOG_WARNF("%s 下未知配置 key: %s", secname, key);
 }
 
 /* 节内标量 key:value；返回 1=已处理，0=未知 key（调用方打 WARN） */
@@ -192,6 +222,7 @@ int config_load(const char *path, struct split_config *cfg)
      * （如默认 fake-ip 段 198.18.0.0/15），解析结束时据此告警。 */
     int declared_proxy4 = 0, declared_proxy6 = 0;
     int declared_direct4 = 0, declared_direct6 = 0;
+    int declared_skip_uid = 0;
 
     /* 先打开文件再写默认值（v1.1.4 修正）：此前 config_defaults 在 fopen 之前执行，
      * 文件打不开时 cfg 已被重置成默认值——daemon reload 的"失败沿用内存配置"
@@ -204,6 +235,19 @@ int config_load(const char *path, struct split_config *cfg)
     config_defaults(cfg);
 
     while (fgets(line, sizeof(line), fp)) {
+        /* P3 #3：fgets 填满缓冲且末尾无 '\n' = 该行超过 511 字符被拆断，剩余部分会被
+         * 当成新行解析（静默错位）。检出后告警并排干该行剩余部分。 */
+        {
+            size_t llen = strlen(line);
+
+            if (llen >= sizeof(line) - 1 && line[llen - 1] != '\n') {
+                LOG_WARNF("配置行过长（>%zu 字符），已按前 %zu 字符处理，其余丢弃: %.48s…",
+                          sizeof(line) - 1, sizeof(line) - 1, line);
+                while (fgets(line, sizeof(line), fp) && !strchr(line, '\n'))
+                    ;
+                continue;
+            }
+        }
         char *p = line, *c;
 
         /* 仅把"行首或空白前"的 # 当注释：值内嵌 #（如 URL fragment）不截断 */
@@ -252,10 +296,16 @@ int config_load(const char *path, struct split_config *cfg)
                 continue;
             }
             *sp = '\0';
+            /* P3 #4：key 冒号前带空格（如 `debug : true`）不 trim 会静默不匹配 */
+            str_trim_tail(p);
+            if (p[0] == '\0') {
+                LOG_WARNF("配置行缺少 key（冒号前为空）: %s", line);
+                continue;
+            }
             char *v = sp + 1; while (*v && isspace(*v)) v++;
             str_trim_tail(v);
             if (strcmp(p, "debug") == 0) cfg->debug = parse_bool_checked("debug", v);
-            else if (strcmp(p, "tun_device") == 0) snprintf(cfg->tun_device, CFG_STRLEN, "%s", v);
+            else if (strcmp(p, "tun_device") == 0) set_str_checked(cfg->tun_device, "tun_device", v);
             else if (strcmp(p, "attach_auto") == 0) cfg->attach_auto = parse_bool_checked("attach_auto", v);
             else LOG_WARNF("未知顶层配置 key: %s", p);
             continue;
@@ -286,7 +336,11 @@ int config_load(const char *path, struct split_config *cfg)
                     LOG_WARNF("skip_uid 非法值: %s（已忽略）", item);
                 break;
             }
-            default: break;
+            default:
+                /* P3 #5：孤儿列表项——未声明任何列表 key 时（cur_list==0）的 `- item`
+                 * 被静默丢弃，用户以为加了一条规则实际没生效 */
+                LOG_WARNF("孤立的列表项（未处于任何列表内，已忽略）: %s", item);
+                break;
             }
             continue;
         }
@@ -297,6 +351,8 @@ int config_load(const char *path, struct split_config *cfg)
             if (!sp)
                 continue;
             *sp = '\0';
+            /* P3 #4：key 冒号前带空格（如 `proxy_cidr4 :`）不 trim 会静默不匹配 */
+            str_trim_tail(p);
             char *v = sp + 1; while (*v && isspace(*v)) v++;
             str_trim_tail(v);
 
@@ -304,12 +360,12 @@ int config_load(const char *path, struct split_config *cfg)
                 if (strcmp(p, "attach_auto") == 0) { cfg->attach_auto = parse_bool_checked("ifaces.attach_auto", v); cur_list = 0; }
                 else if (strcmp(p, "attach_list") == 0) { cur_list = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "exclude") == 0) { cur_list = 2; list_key_inline_warn(p, v); }
-                else { LOG_WARNF("ifaces 下未知配置 key: %s", p); cur_list = 0; }
+                else { section_unknown_key_warn(S_IFACES, p); cur_list = 0; }
                 continue;
             }
             if (section == S_DEFAULT) {
                 if (!handle_scalar(cfg, S_DEFAULT, p, v))
-                    LOG_WARNF("default 下未知配置 key: %s", p);
+                    section_unknown_key_warn(S_DEFAULT, p);
                 continue;
             }
             if (section == S_RULES) {
@@ -317,21 +373,21 @@ int config_load(const char *path, struct split_config *cfg)
                 else if (strcmp(p, "proxy_cidr6") == 0)  { cfg->nproxy6  = 0; cur_list = 4; declared_proxy6 = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "direct_cidr4") == 0) { cfg->ndirect4 = 0; cur_list = 5; declared_direct4 = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "direct_cidr6") == 0) { cfg->ndirect6 = 0; cur_list = 6; declared_direct6 = 1; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "skip_uid") == 0)     { cfg->nskip_uid = 0; cur_list = 7; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "skip_uid") == 0)     { cfg->nskip_uid = 0; declared_skip_uid = 1; cur_list = 7; list_key_inline_warn(p, v); }
                 /* v1.3.1（审查修复）：未知 key 不清 cur_list 会让其后的 "- item" 行
                  * 被并入上一个列表（静默误分流）。未知 key 一律复位当前列表。 */
-                else { LOG_WARNF("rules 下未知配置 key: %s", p); cur_list = 0; }
+                else { section_unknown_key_warn(S_RULES, p); cur_list = 0; }
                 continue;
             }
             if (section == S_CNIP) {
                 if (strcmp(p, "path_v4") == 0)
-                    snprintf(cfg->cnip4_path, CFG_STRLEN, "%s", v);
+                    set_str_checked(cfg->cnip4_path, "cnip.path_v4", v);
                 else if (strcmp(p, "path_v6") == 0)
-                    snprintf(cfg->cnip6_path, CFG_STRLEN, "%s", v);
+                    set_str_checked(cfg->cnip6_path, "cnip.path_v6", v);
                 else if (strcmp(p, "url_v4") == 0)
-                    snprintf(cfg->cnip4_url, CFG_STRLEN, "%s", v);
+                    set_str_checked(cfg->cnip4_url, "cnip.url_v4", v);
                 else if (strcmp(p, "url_v6") == 0)
-                    snprintf(cfg->cnip6_url, CFG_STRLEN, "%s", v);
+                    set_str_checked(cfg->cnip6_url, "cnip.url_v6", v);
                 else if (strcmp(p, "auto_update_hours") == 0) {
                     /* v1.1.9：atoi 对 "24abc"/负值静默吞错 → 改用 strtol+endptr 严格校验。 */
                     char *endp = NULL;
@@ -346,7 +402,7 @@ int config_load(const char *path, struct split_config *cfg)
                     }
                     cfg->cnip_auto_update_hours = (int)u;
                 }
-                else LOG_WARNF("cnip 下未知配置 key: %s", p);
+                else section_unknown_key_warn(S_CNIP, p);
                 continue;
             }
         }
@@ -377,6 +433,13 @@ int config_load(const char *path, struct split_config *cfg)
     if (declared_direct6 && cfg->ndirect6 > 0)
         LOG_WARNF("rules: 已声明 direct_cidr6（%d 条），默认 v6 直连段（fe80::/10、fc00::/7、"
                   "::1/128）已被清空——如需保留请连同默认段写入", cfg->ndirect6);
+    /* P3 #2（审查）：skip_uid 空列表清默认——声明 skip_uid 会清零 config_defaults 种下的
+     * root(0)/shell(2000)，空列表时这两个默认被静默清掉（root/shell 不再绕过代理）。
+     * 只对空列表告警；非空声明是显式列 UID 的常规用法，不再多告警（与 direct 非空告警
+     * 的"只加一条丢其它"脚枪不同，skip_uid 常整体替换）。 */
+    if (declared_skip_uid && cfg->nskip_uid == 0)
+        LOG_WARNF("rules: 声明了 skip_uid 但无列表项，默认 root(0)/shell(2000) 已被清空"
+                  "——root/shell 将不再绕过代理");
 
     /* v1.4.1（功能冲突审查）：跨字段静默失效告警——配置项叠加时一方被另一方静默吞掉
      * （行为无提示），显式 WARN 防"以为生效"：
