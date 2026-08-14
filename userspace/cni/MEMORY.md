@@ -75,6 +75,12 @@
    bad>0 区分"非法行/错误页" vs "空/全异族"（日志更可诊断）；本地加载 `cnip_from_path`
    ok==0 时显式 LOG_WARNF（v4-only 文件配到 v6 等错配不再被 INFO 掩盖）。行为零变化。
 
+## 日志（v1.4.5 补全，debug:true 可见）
+- `cnip_load_url`：下载器识别 `LOG_DEBUGF("CNIP 下载器: %s (curl|wget 系)")`（fork 前探测一次）；
+  `cnip_try_url` 每候选成功 `LOG_DEBUGF("下载成功，耗时 %lldms: %s")`（`clock_gettime(CLOCK_MONOTONIC)`，
+  v1.4.2 多候选 fallback 排障用——哪个源生效、多慢，一目了然）。
+- `cnip_load_fd`：混合文件按族加载结束时 `LOG_DEBUGF("跳过异族行 %u 条...")`（仅 skip>0 时打）。
+
 ## 验证
 - fetch-cnip 下载后 daemon 启动/`reload-cnip`；统计 `direct_cn` 增长即为生效。
 - 格式回归：`cnip_load_file` 单测见 tests/unit（骨架）。

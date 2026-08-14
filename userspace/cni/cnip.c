@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>        /* PATH_MAX（path_lookup 回落查找用） */
+#include <time.h>          /* clock_gettime/CLOCK_MONOTONIC（下载耗时统计） */
 #include <unistd.h>        /* fork/execl/_exit */
 #include <fcntl.h>         /* FD_CLOEXEC（exec 下载器前防 fd 泄漏） */
 #include <sys/socket.h>   /* AF_INET */
@@ -47,7 +48,7 @@ static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
                         unsigned int *p_ok, unsigned int *p_bad)
 {
     char line[256];
-    unsigned int ok = 0, bad = 0;
+    unsigned int ok = 0, bad = 0, skip = 0;
 
     while (fgets(line, sizeof(line), fp)) {
         char *p, *slash = NULL;
@@ -67,15 +68,19 @@ static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
             continue;
 
         /* v1.4.3（混合源按族加载）：异族行跳过、不计 bad（Loyalsoldier cn.txt 同时含
-         * v4+v6，加载 v4 map 时跳过 v6 行）；非法行仍计 bad（ok/bad 语义不变）。 */
+         * v4+v6，加载 v4 map 时跳过 v6 行）；非法行仍计 bad（ok/bad 语义不变）。
+         * v1.4.5：skip 计数仅供 DEBUG 诊断——混合文件按族加载后想确认"该族之外
+         * 到底被跳过了多少行"，或排查"文件全为另一族导致 0 条"时，不用再猜。 */
         {
             int lfam = cnip_line_family(p);
             if (lfam == 0) {
                 bad++;
                 continue;
             }
-            if (lfam != family)
+            if (lfam != family) {
+                skip++;
                 continue;
+            }
         }
 
         slash = strchr(p, '/');
@@ -100,6 +105,8 @@ static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
         else
             bad++;
     }
+    if (skip > 0)
+        LOG_DEBUGF("跳过异族行 %u 条（混合源按族加载，family=%d）", skip, family);
     *p_ok = ok;
     *p_bad = bad;
     return 0;
@@ -207,11 +214,13 @@ static int cnip_try_url(struct split_bpf_ctx *ctx, const char *url,
 {
     pid_t pid;
     int st = 0;
+    struct timespec t0, t1;
 
     if (strchr(url, '\'') || strchr(tmp_path, '\'')) {
         LOG_ERRORF("拒绝含单引号的 URL: %s", url);
         return -1;
     }
+    clock_gettime(CLOCK_MONOTONIC, &t0); /* 下载耗时起点（含 fork+wait+解析校验） */
     pid = fork();
     if (pid < 0) {
         LOG_ERRORF("下载 fork 失败(%s)", strerror(errno));
@@ -286,6 +295,13 @@ static int cnip_try_url(struct split_bpf_ctx *ctx, const char *url,
             return -1;
         }
     }
+    /* v1.4.5：下载耗时——多源 fallback 逐个尝试时，能看出"首选源到底卡了多久才
+     * 回落下一候选"（curl --max-time 60 内超时的源会拖慢整个更新）。 */
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    LOG_DEBUGF("下载成功，耗时 %lldms: %s",
+               (long long)(t1.tv_sec - t0.tv_sec) * 1000LL +
+                   (long long)(t1.tv_nsec - t0.tv_nsec) / 1000000LL,
+               url);
     return 0;
 }
 
@@ -308,6 +324,7 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
                    "（请安装其一，或放置本地 CNIP 文件后 reload-cnip）");
         return -1;
     }
+    LOG_DEBUGF("CNIP 下载器: %s (%s)", tool, is_curl ? "curl" : "wget 系");
 
     /* 多源 fallback（v1.4.2）：url 支持逗号分隔多个候选，按序尝试、任一成功即用。
      * 默认 jsDelivr（大陆可达）优先、raw.githubusercontent（全球更稳）兜底，互为备份；

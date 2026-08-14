@@ -116,11 +116,20 @@
     另：`map_rule_add_cidr/map_rule_del_cidr/map_cnip_add_cidr` 的 CIDR 缓冲
     `char buf[64]` **v1.1.6 加大到 `[200]` 并对 snprintf 返回值判溢出**——配置行源可达
     CFG_STRLEN(128)，旧 64 会让超长 cidr 静默截断 → inet_pton 解析失败记错。
+17. **`iface_reconcile` 一轮汇总（v1.4.5，DEBUG）**：记 `n_before`（调整前已挂数）→ detach 后
+    `n_keep`（保持集）→ attach 后算 `n_detach=n_before-n_keep`、`n_add=nattached-n_keep`。
+    `n_keep` 必须**在 detach 循环后、attach 循环前**捕获——若放 attach 后，nattached 已含新增，
+    n_detach 会为负、n_add 恒 0。仅当 `n_add>0 || n_detach>0` 打 DEBUG（15s 心跳无变化不打，
+    避免每轮刷屏）。
 16. **`iface_plan`（iface.c）：两个分支统一套 `iface_is_physical`（审查修正）**。
     `attach_auto=0` 分支在比对 `attach_list` 名字命中后，仍需经 `iface_is_physical`
     确认真正是物理网卡——此前只比对名字 + exclude，用户若把 `utun0`/`tun0` 写进
     `attach_list` 会把虚拟/tun 接口挂载上去（回环 + parse_err）。与 `attach_auto=1`
     分支口径一致；`iface_is_physical` 内建 IFF_UP 与 lo/tun/utun/rmnet_ipa 等排除。
+
+## 日志（v1.4.5 补全）
+- `map_by_name`：map 打开失败 `LOG_ERRORF`（名字），成功 `LOG_DEBUGF`（debug:true 下逐 map 核对打开情况）。
+- `split_load` 成功行（INFO）：附 `split v%s` + `libbpf %s`（`libbpf_version_string()`）——一眼核对二进制与库版本是否匹配。
 
 ## 已知缺口
 - 无 pinning（`SPLIT_PIN_NS` 仅常量未用）；无 map 类型/大小自检。

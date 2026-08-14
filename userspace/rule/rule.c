@@ -40,8 +40,24 @@ int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
         LOG_ERRORF("map_cfg 写入失败(%s)，内核按 TUN 安全默认运行（default_verdict=%s）",
                    strerror(errno), cfg->default_verdict ? "tun" : "direct");
 
-    LOG_INFOF("rules 已应用: uid=%d proxy4=%d direct4=%d",
-              cfg->nskip_uid, cfg->nproxy4, cfg->ndirect4);
+    /* v1.4.5：补全 v6 明细——此前只报 uid/proxy4/direct4，v6 配了/没配、
+     * 配了多少条全无迹可循；reload 排障（"v6 直连规则没生效"）要从这里对账。 */
+    LOG_INFOF("rules 已应用: uid=%d proxy4=%d proxy6=%d direct4=%d direct6=%d",
+              cfg->nskip_uid, cfg->nproxy4, cfg->nproxy6,
+              cfg->ndirect4, cfg->ndirect6);
+    if (cfg->nskip_uid > 0) {
+        char dbg[256];
+        int off = 0;
+
+        /* 枚举白名单 UID（DEBUG）。单条最长 "4294967295," = 11 字节，guard
+         * 保证每轮至少剩 16 字节，与 daemon tun_list_like 的 off+32<bufsz 同款——
+         * 避免 -Wformat-truncation 对"尾随 shrinking snprintf"告警（-Werror）。 */
+        dbg[0] = '\0';
+        for (int k = 0; k < cfg->nskip_uid && off < (int)sizeof(dbg) - 16; k++)
+            off += snprintf(dbg + off, sizeof(dbg) - (size_t)off, "%s%u",
+                            off ? "," : "", cfg->skip_uid[k]);
+        LOG_DEBUGF("skip_uid 白名单: [%s]", dbg);
+    }
     return 0;
 }
 

@@ -24,6 +24,8 @@ static struct bpf_map *map_by_name(struct bpf_object *obj, const char *name)
 
     if (!m)
         LOG_ERRORF("map %s 缺失", name);
+    else
+        LOG_DEBUGF("map %s 打开成功", name);
     return m;
 }
 
@@ -76,7 +78,10 @@ int split_load(struct split_bpf_ctx *ctx, const char *obj_path)
         !ctx->m_tun || !ctx->m_cfg || !ctx->m_stats || !ctx->m_rawip)
         goto fail;
 
-    LOG_INFOF("加载成功 prog_fd=%d", ctx->prog_fd);
+    /* v1.4.5：附带 split 版本与 libbpf 版本——BPF 加载失败/行为异常排障时
+     * 一眼区分"代码旧了"与"libbpf 行为变化"，避免去翻构建环境。 */
+    LOG_INFOF("加载成功 prog_fd=%d (split v%s, libbpf %s)",
+              ctx->prog_fd, SPLIT_VERSION, libbpf_version_string());
     return 0;
 
 fail:

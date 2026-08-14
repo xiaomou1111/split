@@ -94,7 +94,15 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.4（当前）        CNIP 加载诊断改进（2026-08 CNIP 审查 P3 修理）：
+v1.4.5（当前）        DEBUG 日志补全（纯增量，无行为/契约变更；debug:true 下可见更多过程细节）：
+                      ①loader：map 打开成功/失败明细、加载成功附带 split/libbpf 版本
+                      ②cnip：下载器识别（curl/wget）、每源下载耗时、混合文件按族加载跳过行数
+                      ③rule：reload 后按族规则计数（uid/proxy4/proxy6/direct4/direct6）、
+                        skip_uid 白名单枚举（DEBUG）
+                      ④daemon：ctl 实际收到命令、CNIP 更新子进程收尸结果（成功/失败形态）
+                      ⑤iface：reconcile 一轮"新增/卸载/保持"汇总（有变化才打）
+                      ⑥版本号 1.4.5（bump-version.sh）
+v1.4.4        CNIP 加载诊断改进（2026-08 CNIP 审查 P3 修理）：
                       ①下载校验按失败形态区分日志：bad>0 → "N 行非法（疑似错误页/垃圾）"；
                         bad==0 → "空或全为另一地址族行（检查 url 配错族）"（v1.4.3 族过滤
                         使异族行不计 bad，二者不再同报"疑似错误页"）
@@ -215,7 +223,8 @@ v1.3                  Android App MVP：开关 + stats 展示（root/JNI）
 ## tproxy 模式：技术约束与可选形态（研究结论，暂未实现）
 
 > 结论先行：**TPROXY 目标在内核里只支持 PREROUTING 钩子，不支持 OUTPUT（本机出站方向）**。
-> 我们的 eBPF 处理的是本机进程发起的出站流量，方向相反，**形态 A 已实测否定**。
+> 我们的 eBPF 处理的是本机进程发起的出站流量，方向相反，**形态 A 已实测否定**；
+> 形态 C（loopback 反弹）内核可行但不推荐（见下）。
 
 ### 硬约束 1（源码核实，小米 5.10 GKI `net/ipv4/ip_output.c`）
 出站路径执行顺序：
@@ -259,8 +268,41 @@ ip route add local 0.0.0.0/0 dev lo table 100
 - 本机出站 tproxy 的替代是 `REDIRECT`（nat output 链，`nft add rule nat output tcp dport 853 redirect to 10053`），但 REDIRECT 会改目标、丢原始 dst（需 SO_ORIGINAL_DST 才能还原，Android 上支持有限）。
 - 均不满足"内核级 CNIP 分流 + 本机出站"的目标。
 
+**形态 C（未覆盖的缝隙）：loopback 反弹（内核可行，但工程上不推荐）**
+
+上述"本机出站 tproxy 不可行"否定的是**原地打 mark + 重路由**（形态 A）。
+若补一个步骤——tc egress 里 `bpf_skb_set_mark()` + `bpf_redirect(lo, 0)`——包从 lo 重入走的是
+**lo 的 RX 路径 → PREROUTING**，而 TPROXY 在 PREROUTING 是合法的（硬约束 2 的例外面），
+skb 的 mark 在同一次重入中保留。配合 mark 精确匹配即可把 eBPF 判定的代理流量喂给 mihomo
+tproxy socket（mihomo 侧零改动，`mihomo-package.yaml` 已开 `tproxy-port: 1536`）：
+
+```
+iptables -t mangle -A PREROUTING -m mark --mark 0x2/0x2 -p tcp -j TPROXY --on-port 1536
+ip rule add fwmark 0x2 table 100
+ip route add local 0.0.0.0/0 dev lo table 100
+```
+
+- **2026-08 二次审查确认**：内核层面能跑通（`bpf_redirect` 到 lo → `loopback_xmit` →
+  `netif_rx` → `NF_INET_PRE_ROUTING`），不是形态 A 那种 verifier/挂载层就断的死路。
+- **但不建议做**，代价与形态 B 同源、另有新坑：
+  1. 循环/静默丢包两把刀：TPROXY 未命中（规则未加载/协议未覆盖）时 marked 包重路由出网 →
+     再过 eBPF → 必须加"已标记不再反弹"守卫否则无限循环；即便加守卫，`ip route add local ...
+     dev lo table 100` 会把未接住的 marked 包送 lo → 无 socket → 静默丢包（比 TUN 断流更隐蔽）。
+     两点都触碰"任何异常一律 TC_ACT_OK 绝不丢包"铁律。
+  2. 双判定点漂移：eBPF 判"代理" + iptables `-m mark` 判"转 mihomo"两套分类，改一处漏一处。
+  3. 全局路由/netfilter 操纵回归：ip rule + local 路由 + iptables 正是主线刻意规避的厂商差异面
+     （Android netd 管理 iptables、厂商魔改 fwmark 路由）；`route_tun_hijacked` 监控需适配，
+     否则把 tproxy 自身规则误报成"auto-route 接管"。
+  4. mihomo 仍需从 tun mode 切 tproxy mode，DNS 拦截链（`tun.dns-hijack`）重做，fake-ip 映射故事要改。
+  5. 性能上 lo 反弹每个代理包多一次完整栈重入（lo xmit→RX→PREROUTING netfilter→重路由），
+     把 tproxy"内核 TCP 栈"的稳态收益吃回去一大块；eBPF 侧成本本就极低（一次 LPM+redirect），
+     瓶颈在 mihomo 用户态栈不在 BPF。
+- 低成本替代方向（TUN 架构内）：mihomo `stack: system`（内核栈 + 仍走 TUN，保留单钩子模型），
+  在 Linux 桌面先测 gvisor vs system 的 CPU/延迟差异再决定。
+
 ### 结论
 tproxy 模式**不可行**（内核硬限制：tproxy 不支持本机出站方向）。**保持 TUN 为主线**（内核 CNIP 分流 + 零拷贝 redirect，已真机验证）。若未来要"复用 mihomo 端口"，只能走 REDIRECT（丢原始目标）或应用层代理端口（mixed），都不是透明内核分流。
+形态 C（loopback 反弹）内核可行但工程上不推荐（见上）：把 netfilter/路由操纵整套搬回，另添循环与静默丢包新坑，收益仅在 mihomo CPU 稳态——若只为省 CPU，先试 TUN 架构内的 `stack: system`。
 
 ## TUN redirect 兼容性：已解决（v1.0.4，queue_mapping 修复）
 

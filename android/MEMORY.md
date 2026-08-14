@@ -130,7 +130,9 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 ## box 集成经验（v1.0.2 真机实测，小米 diting + KernelSU）
 - 设备上若有 box 代理模块（`/data/adb/box`），其 mihomo 二进制（`/data/adb/box/bin/mihomo`）可复用。
 - **不要改 box 原配置**：复制其 mihomo 目录到 `/data/adb/split/mihomo/`（含 proxies/ rules/ cache.db），再改 tun 段。
-- **关键改动（tun 段）**：`enable:true, device:utun, auto-route:false, strict-route:false`。  `auto-route:false` 是必须的——让 mihomo 只建 tun 设备不接管路由，路由和分流全交给 eBPF。
+- **关键改动（tun 段，v1.1.3 起由 fix-mihomo-tun.sh 幂等执行，唯一真源）**：`enable:true, device:utun,
+  auto-route:false, strict-route:false, stack:gvisor, gso:false, mtu:1500, auto-detect-interface:false`。
+  `auto-route:false` 是必须的——让 mihomo 只建 tun 设备不接管路由，路由和分流全交给 eBPF。
 - 启动：`mihomo -t -d <dir>` 先测配置，再 `nohup mihomo -d <dir> &`（root 跑，uid=0 已在 skip_uid 防回环）。
 - **坑（v1.0.3 实机踩坑）**：改 tun 段必须用"**整行重写**" sed（`s/^  stack:.*$/  stack: gvisor/`），
   **不要**用局部替换（`s/^\(  stack:\) [a-zA-Z]*/\1 gvisor/`）。局部替换多次执行会把
@@ -138,7 +140,7 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   `system#system/minxd` → mihomo `invalid tun stack` fatal → utun 不建 → splitd 降级。
   **症状**：mihomo.log `Parse config error: invalid tun stack`；splitd.log `30s 内未发现 utun`。
   **恢复**：`sed -i 's/^  stack:.*$/  stack: gvisor #system\/minxd/' config.yaml` 后重启。
-- **CNIP 数据**：box 的 `/data/adb/box/run/cn.zone`（v4, 7045行）和 `cn_ipv6.zone`（v6）就是"每行 CIDR"格式，可直接复制给 splitd 用（命名 cn_cidr_v4.txt / cn_cidr_v6.txt）。
+- **CNIP 数据**：box 的 `/data/adb/box/run/cn.zone`（v4）和 `cn_ipv6.zone`（v6）就是"每行 CIDR"格式，可直接复制给 splitd 用（命名 cn_cidr_v4.txt / cn_cidr_v6.txt）；行数随 box 数据源而定（本仓库默认源 Loyalsoldier 全量 v4=4145 / v6=1235）。
 - **split.yaml 的 cnip 路径建议用绝对路径**（`/data/adb/split/config/cn_cidr_v4.txt`），避免 splitd 工作目录歧义。
 - 端到端验证结论：CN 直连（direct_cn 增长、不经过 mihomo）、海外 redirect 进 utun（proxy 增长、utun rx 增长）、skip_uid 防回环、无 dropped/redirect_err。
 - 节点 alive 但访问超时 → 是 mihomo 节点自身连通性问题，不是框架问题。

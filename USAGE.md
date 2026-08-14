@@ -1,6 +1,6 @@
 ﻿# eBPF-Split 使用说明书
 
-> 版本 v1.4.4 ｜ 面向：想在 Linux / Android 真机上用起来的人
+> 版本 v1.4.5 ｜ 面向：想在 Linux / Android 真机上用起来的人
 > 目标读者：能看懂 shell 命令、会 root 的普通用户。代码细节见 `docs/`。
 
 ---
@@ -264,6 +264,11 @@ splitctl validate -c cfg             # 只校验配置
 ---
 
 ## 5. 排障
+
+> **debug 过程日志（v1.4.5）**：`split.yaml` 设 `debug: true`（或 `splitd -d`）后 splitd.log 会
+> 输出更细的过程细节：map 逐个打开、split/libbpf 版本、CNIP 下载器与每源耗时、混合文件按族
+> 加载跳过行数、rules 按族计数与 skip_uid 白名单、每条 ctl 命令、CNIP 更新子进程收尸结果、
+> iface reconcile 每轮增删汇总。排障先开它，再对照下面的 Q&A。
 
 ### Q1. splitd 启动报"找不到 tun 设备"
 → 先启动 mihomo，确认 tun 设备出现：`ip link show utun`。设备名要和配置一致。

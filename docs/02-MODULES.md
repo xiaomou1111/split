@@ -95,7 +95,9 @@ L4 平台胶水     android/magisk
 
 ### 2.2 cni/
 - `cnip.c`：从 URL/文件拉 CNIP 文本（`A.B.C.D/N` 每行）→ inet_pton → 组装 lpm key → 批量 update。
-- `loader` 里对两族各一个。cidr 数量多时用并区/裁剪（v4 段数约 ~7k、v3 ~3k）。
+- 两族各一棵 LPM_TRIE（`map_cnip4/6`，容量 65536）。默认源（v1.4.3 起 mihomo 生态权威源
+  `Loyalsoldier/geoip`）全量实测 **v4=4145 / v6=1235** 条，直接逐条 update（无并区/裁剪）；
+  v4+v6 混合文件按族加载（v1.4.3，异族行跳过不计 bad）。
 - **对外契约**：`int cnip_apply(struct split_bpf_ctx *ctx, const struct split_config *cfg);`（按
   `cfg->cnip4_path/cnip6_path` 导入）；`int cnip_load_file(ctx, path, family);` / `int cnip_load_url(ctx, url, tmp_path, family);`
 
@@ -193,7 +195,7 @@ L4 平台胶水     android/magisk
 
 | 想改 | 只需动 | 不需动 |
 |---|---|---|
-| 换 CNIP 源头 | `userspace/cni/cnip.c` 的 URL 常量 + config | 内核、loader |
+| 换 CNIP 源头 | `common/config.c` 默认 URL + `configs/split.yaml.example` + `scripts/fetch-cnip.sh` 候选数组（三处同源，见 cni/MEMORY 第 7/8 条） | 内核、loader |
 | 增加一条同优先级规则 | `userspace/rule/` + config | 内核 |
 | 调整判定顺序 | `kernel/bpf/policy.h`（+ 文档），重新编译 BPF | userspace 无感知 |
 | 改 map 上限/类型 | `kernel/bpf/maps.h`（+ loader 的期望） | 其余不变 |

@@ -26,6 +26,12 @@
      重放会写截断串（与运行时 map 的完整 CIDR 不一致）。实际 CIDR 最长 <50B，触发即异常输入，
      拒绝并 WARN；daemon 侧 add-rule 已先入 map 会如实报"已入 map 但追踪满/非法"。
 
+## 日志（v1.4.5 补全）
+- `rule_apply_all` 成功后 INFO 行扩展为按族计数：`uid/proxy4/proxy6/direct4/direct6`
+  ——reload 排障（"v6 直连规则没生效"）从这行对账。
+- skip_uid 白名单在 `nskip_uid>0` 时补 DEBUG 枚举（`dbg[256]`，guard 每轮剩 ≥16 字节防
+  `-Wformat-truncation`，与 daemon `tun_list_like` 同款；CFG_LIST_MAX=16 最坏 176B 不溢出）。
+
 ## 与本仓库其它模块的关系
 - 依赖 loader 的 `map_skip_uid_add / map_rule_add_cidr / map_set_cfg`。
 - 被 daemon（启动+reload+**ctl add-rule/del-rule**）和 cli（add-rule/del-rule）调用。

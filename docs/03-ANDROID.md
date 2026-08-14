@@ -157,7 +157,7 @@ sepolicy.rule` 骨架；`scripts/gen-magisk.sh` 打包 zip。
    ip tuntap add dev tun0 mode tun && ip link set tun0 up
    export SPLIT_SOCKET=/data/adb/split/run/splitd.sock
    splitd -d -c split.yaml -b split.bpf.o &
-   splitctl status   # → OK prog_fd=.. attached=N tun=16 cnip4=7045 cnip6=1535 hijack=0
+   splitctl status   # → OK prog_fd=.. attached=N tun=16 cnip4=4145 cnip6=1235 hijack=0
    splitctl stats    # 看 direct_cn/proxy 计数
    ```
    > **v1.1.3 起 status 带健康字段**：`cnip4/cnip6` 为 0 = CNIP 未导入（文件缺失，配了 url 会自动补拉，失败每 5 分钟重试直到成功——仅成功后才停止补拉）；
@@ -213,7 +213,8 @@ sh /data/adb/split/scripts/setup-box-tun.sh   # 或仓库里 android/scripts/set
 
 脚本做的事：
 1. **不改 box 原件**：`cp -a /data/adb/box/mihomo /data/adb/split/mihomo`
-2. **改 tun 段**：`enable:true, device:utun, auto-route:false, strict-route:false`
+2. **改 tun 段**（`fix-mihomo-tun.sh` 幂等执行，单一真源）：
+   `enable:true, device:utun, auto-route:false, strict-route:false, stack:gvisor, gso:false, mtu:1500, auto-detect-interface:false`
    - `auto-route:false` 是**必须**的：让 mihomo 只建 tun 设备、不接管路由，路由与分流全交给 eBPF。
 3. **复用 CNIP**：`cp /data/adb/box/run/cn.zone → cn_cidr_v4.txt`（格式兼容，每行 CIDR）
 4. 起 mihomo → 等 utun → 起 splitd → 验证

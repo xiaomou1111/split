@@ -91,6 +91,9 @@
 - **命令整词匹配（v1.1.4 加固）**：用 `cmd_is()`（前缀 + 下一字符必须是空白/结尾）——
   此前 `strncmp(cmd,"stop",4)` 让 `stopx`/`stop anything` 误触发 stop；`reload-cnip` 判断在
   `reload` 之前，次序保持。命令集不变（usage 即契约）。
+- **命令审计日志（v1.4.5）**：trim 完成后、分发前 `LOG_DEBUGF("ctl 命令: %s")`——debug:true
+  下能看到 daemon 实际收到的每条命令（客户端误发/协议错位排障用；WebUI 周期性 status 也会
+  打，勿升 INFO）。
 - **权限（v1.0.5）：`ctl_serve` 先用 `SO_PEERCRED` 校验 peer uid==0，非 root 直接回 `ERR 仅 root 可控制 splitd`**。splitd 以 root 运行，防止任意本地用户 stop/改规则。Magisk 脚本以 root 调用 splitctl 不受影响；若需让普通 uid 控制，须显式改此校验。
   **v1.1.4：`ctl_listen` bind 后 `chmod(path, 0600)`**——非 root 直接连不上（此前依赖 umask，可能 755）；
   SO_PEERCRED 是第二道闸，两层都别删。
@@ -256,6 +259,10 @@
   静默"成功"但 CNIP 保持 0 条（用户以为已补拉）；url 有 path 无的族不可能落盘。
   未配 url → 打 WARN 提示放 cn_cidr_v4.txt 后 reload-cnip。
 - 子进程退出码：0=成功（按原间隔续期）；非 0=失败（5 分钟后再试，避免离线时每小时刷日志）。
+- **收尸日志（v1.4.5 补全）**：`waitpid` 回收后按结果区分——成功 `LOG_DEBUGF("CNIP 更新子进程
+  pid=%d 成功完成，下次更新已排期")`；失败 `LOG_ERRORF("... pid=%d %s（被信号终止|exit 非 0），
+  5 分钟后再试")`。排障"CNIP 没更新/迟迟不更新"时，splitd.log 能直接看到是子进程没跑成
+  还是跑完没排期。
   **v1.2.8（审查修复）**：`waitpid` 失败（如 ECHILD——子进程已被系统回收）时显式清除
   `cnip_pid`/`g_cnip_busy` 并按 fork 失败同语义 1 分钟后再试——旧实现不清会永久卡死：
   定时更新不再触发、`reload-cnip` 被 `g_cnip_busy` 永久拒绝。

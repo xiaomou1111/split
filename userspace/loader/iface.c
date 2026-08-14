@@ -89,6 +89,8 @@ int iface_reconcile(struct split_bpf_ctx *ctx, const struct split_config *cfg,
     struct iface_list owned;
     const struct iface_list *list = snap;
     int plan[IFACE_MAX], n, k, already;
+    /* v1.4.5：reconcile 一轮的"增/减/保持"汇总计数（DEBUG 明细用） */
+    int n_before, n_keep, n_detach, n_add;
 
     /* v1.1.9：本函数全程复用一个快照（传入或自扫一次），并向下透传给
      * iface_plan / split_attach|detach_iface / map_rawip_sync，消除此前
@@ -107,6 +109,8 @@ int iface_reconcile(struct split_bpf_ctx *ctx, const struct split_config *cfg,
     if (n < 0)
         return -1;
 
+    n_before = ctx->nattached; /* 汇总基准：本轮调整前的已挂集大小 */
+
     /* 卸载不在计划里的 */
     for (k = 0; k < ctx->nattached; k++) {
         already = 0;
@@ -115,6 +119,7 @@ int iface_reconcile(struct split_bpf_ctx *ctx, const struct split_config *cfg,
         if (!already)
             split_detach_iface(ctx, ctx->attached[k--], list);
     }
+    n_keep = ctx->nattached; /* 卸载后、新增前的已挂集 = 保持集（须先于 attach 捕获） */
     /* 新增 */
     for (k = 0; k < n; k++)
         split_attach_iface(ctx, plan[k], list);
@@ -122,6 +127,16 @@ int iface_reconcile(struct split_bpf_ctx *ctx, const struct split_config *cfg,
      * 挂载路径已逐接口同步，这里兜底处理"挂载前就存在的接口类型变化"、
      * "接口 UP 状态变化但没触发 attach/detach"等边角场景。 */
     map_rawip_sync(ctx, 0, list);
+
+    /* v1.4.5：reconcile 一轮的"增/减/保持"汇总（DEBUG）。
+     * 单接口的 attach/detach 已有 INFO 日志，这里给的是每轮自愈的概览——
+     * 无变化（期望集==已挂集且 filter 全在）不打，避免 15s 心跳每轮刷一条；
+     * 有变化时"新增/卸载各多少、保持多少"一眼对账。 */
+    n_detach = n_before - n_keep;
+    n_add = ctx->nattached - n_keep; /* 实际新增数（attach 失败不计入 nattached） */
+    if (n_add > 0 || n_detach > 0)
+        LOG_DEBUGF("reconcile: 新增 %d，卸载 %d，保持 %d（期望 %d，调整前 %d）",
+                   n_add, n_detach, n_keep, n, n_before);
     return 0;
 }
 

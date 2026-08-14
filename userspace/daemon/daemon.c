@@ -413,6 +413,10 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         cmd[--n] = '\0';
     }
 
+    /* v1.4.5：记录实际收到的 ctl 命令——WebUI/脚本调了什么、带什么参数，
+     * 与 daemon 行为日志对账时不必再猜"这个 add-rule 到底发出没有"。 */
+    LOG_DEBUGF("ctl 命令: %s", cmd);
+
     if (cmd_is(cmd, "stats")) {
         ctl_stats(c, ctx);
     } else if (cmd_is(cmd, "status")) {
@@ -1017,17 +1021,26 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
             pid_t r = waitpid(cnip_pid, &st, WNOHANG);
 
             if (r == cnip_pid) {
+                pid_t done = cnip_pid; /* 回收后才清 0，先留一份用于日志 */
                 cnip_pid = 0;
                 g_cnip_busy = 0; /* 子进程已回收：解除 reload-cnip 拒绝 */
                 if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
                     cnip_boot_once = 0;
                     cnip_next_ms = now_ms() +
                         (long long)cfg.cnip_auto_update_hours * 3600000LL;
+                    /* v1.4.5：成功回收的收尾日志——CNIP 生命周期里"fork 成功"与
+                     * "灌入完成"之间原本只有子进程内部日志，父进程无任何痕迹。 */
+                    LOG_DEBUGF("CNIP 更新子进程 pid=%d 成功完成，下次更新已排期",
+                               (int)done);
                 } else {
                     /* 失败保留 boot_once（仅成功才清零）：hours=0（仅补拉一次）
                      * 时若清零，调度条件 (hours>0 || boot_once) 恒 false，
-                     * "5 分钟后再试"永远不会发生——与 fork 失败分支语义一致。 */
-                    LOG_ERRORF("CNIP 更新失败，5 分钟后再试");
+                     * "5 分钟后再试"永远不会发生——与 fork 失败分支语义一致。
+                     * v1.4.5：失败形态（被信号杀 vs exit 非 0）一并带出——
+                     * 前者是 OOM/kill 类问题，后者是下载/灌入数据问题，方向不同。 */
+                    LOG_ERRORF("CNIP 更新失败（子进程 pid=%d %s），5 分钟后再试",
+                               (int)done,
+                               WIFSIGNALED(st) ? "被信号终止" : "exit 非 0");
                     cnip_next_ms = now_ms() + 300000LL;
                 }
             } else if (r < 0) {
