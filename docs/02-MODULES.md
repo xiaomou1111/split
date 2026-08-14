@@ -123,8 +123,10 @@ L4 平台胶水     android/magisk
   路径，原先要等下一轮 1s 心跳，期间有 stale 丢包窗口）与 `reload` 命令（重读配置后立即对齐）。
   **v1.2.4（真机修复）**：事件快照缺 utun 时先强制 `iface_scan` 权威复核再定论——快照可能
   拍在 mihomo 重建 utun 的 DELLINK/NEWLINK 间隙，直接按快照置 0 会出现"ip link 可见 utun 但
-  map_tun=0、代理完全失效"的假象；utun 缺失降级期间（`tun_sync` 返回 1）心跳从 1s 收紧到
-  300ms，事件漏收时恢复代理最长等待 ≤300ms。
+  map_tun=0、代理完全失效"的假象；utun 缺失降级期间（`tun_sync` 返回 1）心跳从 1s 收紧。
+  **P1 退避（2026-08 CPU 审查批次）**：降级重试间隔不再恒 300ms，而按连续失败
+  300ms→1s→5s→30s 封顶递退（瞬时抖动恢复代理最长等待仍 ≤300ms，持续缺失不再无限
+  3.3Hz 唤醒）；任一成功立即回正常 1s。
   **v1.2.5（名字漂移兜底）**：mihomo 重载后新 TUN 可能不再叫配置名。精确匹配（含复核）仍缺时，
   按"比最近一次有效 ifindex 更新 + IFF_UP + TUN 类名字"找候选自动对齐并打 WARN（`tun_find_drift`，
   `g_tun_last_good` 基准防误挂系统 VPN）；"不存在"日志附带扫描中的 TUN 类接口清单（`tun_list_like`）
@@ -147,10 +149,10 @@ L4 平台胶水     android/magisk
   `update-cnip`（v1.4.1）：手动触发 CNIP 更新——与 `reload-cnip`（只重读本地文件）不同，会重新下载
   `cnip.url_v4/url_v6` 后全量重灌（复用定时自动更新的后台 fork 路径，ctl 立即回"已安排"）。
 - `list-rules`（v1.2.2）：逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表用。
-- `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 10s 自检路由接管，变化即打日志。
-  **v1.2.8（审查修复）**：`hijack` 字段读主循环 10s 节流缓存的 `g_hijack_now`（含 -1=检测失败），
+- `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 30s（P2：10s→30s）自检路由接管，变化即打日志。
+  **v1.2.8（审查修复）**：`hijack` 字段读主循环节流缓存的 `g_hijack_now`（含 -1=检测失败），
   不再在 ctl 路径同步重跑 netlink dump（最坏 4×2s 阻塞主循环的 ctl/网络事件/CNIP 调度）；
-  status 至多 10s 陈旧。
+  status 至多 30s 陈旧。
 - 通过 unix socket (`/run/splitd.sock`，或 `$SPLIT_SOCKET`) 与 daemon 通信；纯输出。
 
 ### 2.6 common/

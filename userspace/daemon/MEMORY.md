@@ -16,7 +16,7 @@
 3. `iface_resolve_tun(tun_device)`（默认 `utun`）；**<=0 → exit 3**（mihomo 必须先启动）。
 4. `map_set_tun`（失败仅 warn 不退出，后续由 tun_sync 兜底）→ `rule_apply_all` → `cnip_apply`（仅配置了路径时）。
 5. `iface_reconcile`（首次挂载）。
-6. `ctl_listen`（unix socket）+ `iface_watch_open`（netlink）→ poll 循环（2s 超时）。
+6. `ctl_listen`（unix socket）+ `iface_watch_open`（netlink）→ poll 循环（超时自适应到最近定时器，上限 2s，见"主循环调度"节）。
 7. **CNIP 定时自动更新（v1.0.6 fork 化）**：`cnip_auto_update_hours>0`（默认 24=每天）且到
    `cnip_next_ms` 时 **fork 子进程**执行 `cnip_auto_update`（下载 url→覆盖本地文件→全量重灌 map；
    子进程继承 map fd，直接灌入），父进程 `waitpid(WNOHANG)` 回收不阻塞 poll 主循环。
@@ -52,8 +52,8 @@
 - **`update-cnip`（v1.4.1，手动更新 CNIP）**：触发一次与定时自动更新相同的
   "下载 url_v4/v6 → 原子落盘 → 全量重灌"（`cnip_auto_update`），**不阻塞主线程**——
   ctl 分支校验（`g_cnip_busy` 忙拒绝 / 无 url 拒绝）后只置 `g_cnip_req=CNIP_REQ_UPDATE` +
-  把 `cnip_next_ms` 提前到 now，主循环下一轮 poll 迭代走 fork 子进程路径（fire 后清
-  `g_cnip_req`）。**手动更新失败不自动重试**（与 boot_once"成功才清零、失败 5 分钟
+  把 `cnip_next_ms` 提前到 now，主循环下一轮 poll 迭代走 fork 子进程路径（**fire 成功才清
+  `g_cnip_req`，F4——fork 失败保留请求，60s 后按原类型重试**）。**手动更新失败不自动重试**（与 boot_once"成功才清零、失败 5 分钟
   再试"不同——用户可再点）；cnip_next_ms 在成功分支被重设为"now+hours"，hours=0 时因
   条件 `hours>0||boot_once||g_cnip_req!=NONE` 全 false 不会重复 fire。改调度条件时四个
   触发源（定时/补拉/update-cnip/reload-cnip）必须一起维护。
@@ -61,12 +61,14 @@
   随后可能跟 `WARN ...` 行（CNIP 0 条未导入 / 路由被 mihomo auto-route 接管 / **tun 缺失
   （map_tun=0，v1.2.7 审查 H2：代理流量被放行直连的静默降级要可见）**）——机器可解析，
   人类一眼看出"分流是否真的生效"。WebUI app.js 解析这些字段（改格式必须同步 app.js）。
-  **v1.2.8（审查修复）**：`hijack` 字段改读主循环 10s 节流缓存的 `g_hijack_now`（含 -1=检测
+  **v1.2.8（审查修复）**：`hijack` 字段改读主循环节流缓存的 `g_hijack_now`（含 -1=检测
   失败）——此前 `ctl_status` 在 ctl 路径同步重跑 `route_tun_hijacked`（2~4 次 netlink dump、
-  最坏 4×2s），阻塞主循环的 ctl/网络事件/CNIP 调度。现 status 至多 10s 陈旧，不再阻塞。
+  最坏 4×2s），阻塞主循环的 ctl/网络事件/CNIP 调度。现 status 至多 30s（P2：10s→30s）
+  陈旧，不再阻塞。
 - **`list-rules`（v1.2.2 新增，WebUI 规则列表）**：枚举 proxy/direct 四个规则 map（LPM_TRIE），逐行回 `proxy <cidr>` / `direct <cidr>`（v4 在前、v6 在后）；先 `OK` 后数据行再 `END`，无规则则只有 OK/END 两行。实现走 loader 的 `map_rule_foreach`（prev-key 顺序迭代，不删键）。**展示的是 map 实况**（配置基线 + 运行时 add-rule/del-rule 的结果），改输出格式必须同步 app.js 的 loadRules。
 - **`reload`（v1.0.6 起）是"重读配置文件再全量应用"**：`config_load(cfg_path)` 成功后把结果写回
-  daemon 的活配置（`cnip_next_ms` 按新 `cnip_auto_update_hours` 重算；`debug:true` 同步日志级别，
+  daemon 的活配置（`cnip_next_ms` 只提前不推后地按新 `cnip_auto_update_hours` 校准——F3，防覆盖
+  挂起的补拉/重试，见"主循环调度"节；`debug:true` 同步日志级别，
   **v1.2.8：`debug:false` 也恢复 INFO——旧实现只升不降**），
   失败则**沿用内存配置继续重放规则**（记 ERROR 不丢现有规则）。随后 `rule_apply_all` +
    `rule_overrides_replay`（**v1.2.0，见下**）+ `iface_reconcile`。此前（≤1.0.5）reload 只重放内存 cfg，不读文件——改前必看。
@@ -110,19 +112,69 @@
   偏差（满/非法回 ERR 与说明）；reload 后由 `rule_overrides_replay` 重放——CLI 在线规则跨
   reload 保留。**重启即丢、不落盘**。详见 rule/MEMORY 第 7 条。
 
+## 主循环调度（2026-08 调度审查批次，F1-F4）
+> 主循环每轮顺序：CNIP 调度（fork）→ CNIP 回收（waitpid WNOHANG）→ 自适应 poll →
+> 事件处理 → 心跳节流（tun 1s~30s 退避 P1 / reconcile 15s P3 / hijack 30s P2）。
+> 定时器全部 `now_ms()`（CLOCK_BOOTTIME）节流。
+- **F1 自适应 poll 超时**：poll 超时不再固定 2000ms，改为"最近定时器截止时刻 − now"、上限
+  2000ms——截止取 tun_sync（`tun_sync_interval`，P1 退避 300ms~30s）、reconcile
+  `RECONCILE_MS`=15000（P3）、hijack `HIJACK_CHECK_MS`=30000（P2）、
+  cnip_next_ms（**仅当会 fire 且 `cnip_pid==0`** 才纳入：fork 条件门开时才可能 fire，子进程
+  运行中纳入会让 poll(0) 空转忙循环）。到期即 poll(0) 立刻返回、由下方节流块执行。
+  修掉旧问题：固定 2s poll 把降级 300ms / 1s 心跳在"事件漏收（心跳兜底的目标场景）"下钉死成
+  2s 步长，`TUN_SYNC_DEGRADED_MS` 注释承诺的"恢复代理最长等待 ≤300ms"无法成立。
+  **改 poll 超时语义时保持"截止=min(各定时器)"，勿回退固定 2000。三个兜底心跳的截止
+  必须与其节流条件同源（RECONCILE_MS / HIJACK_CHECK_MS / tun_sync_interval），
+  否则 poll 提前空醒或把心跳延迟到截止——v1.0.6 旧病。**
+- **F2 netlink recv 超时 2s → 300ms**（netlink.c，route_tun_hijacked + iface_scan 两处）：
+  两者都是主循环同步 dump（正常 <1ms）。旧 2s `SO_RCVTIMEO` 在 netlink 异常时最坏停摆
+  8s（hijack 4×2s）/ 每轮 2s（iface_scan，每 1s 心跳都调）。300ms 余量充足，异常时停摆压到
+  ~1.2s。**"防永久阻塞"意图不变：超时按失败处理，调用方保持 map 原值不误清。**
+- **F3 reload 只提前不推后 cnip_next_ms**：reload 重读配置后旧实现把 cnip_next_ms 重置为
+  now+hours——若 boot_once 补拉已排期（now+5s）或补拉失败在 5 分钟重试窗口，一次 reload
+  会把 CNIP 缺失自愈/重试静默推迟最多 24h。现改为 `if (t < *cnip_next_ms) *cnip_next_ms = t`
+  （只提前，永不推后）。**改调度条件时四个触发源（定时/补拉/update-cnip/reload-cnip）一起维护。**
+- **F4 fork 失败保留手动请求**：g_cnip_req 清空从"fork 前"移到"fork 成功后"——fork 失败时
+  保留 update-cnip / reload-cnip 请求，60s 重试分支仍按原请求类型 fire（否则 hours==0 时
+  手动请求被静默吞掉，用户已收到"已安排"却永不执行）。**"一次请求 fire 一次"语义不变**
+  （fire 成功即清；子进程继承的副本无意义，_exit 不触碰）。
+
+## 主循环 CPU（2026-08 CPU 审查批次，P1-P3）
+> 静态结论：稳态无忙循环（三个心跳都在进入时无条件刷新 last_ms；iface_watch 用
+> MSG_DONTWAIT 排空事件到 EAGAIN；poll 有界）。稳态 CPU 已 ~0.02%（主成分：1Hz
+> RTM_GETLINK dump + 路由/规则 dump——P2 后由 10s 周期变 30s）。P1 处理唯一
+> 持续活跃场景；P2/P3 削周期 dump。
+- **P1 降级退避（唯一实质收益）**：utun 长期缺失时（mihomo 未起/崩溃/错名）旧实现以
+  300ms（3.3Hz）无限重试——瞬时抖动（mihomo 重载重建）才值得 300ms 快重试，持续缺失是
+  耗电/唤醒损耗。现 `tun_sync_interval(fail_cnt)` 按连续失败 300ms→1s→5s→30s 封顶递退，
+  任一成功立即回正常 1s。间隔是**心跳节流条件与 F1 poll 截止的唯一来源**（二者同源，
+  否则 poll 提前空醒/延迟心跳）。fail_cnt 由 `tun_sync_record(r, &fail_cnt)` 在**全部三处**
+  tun_sync 调用点维护（reload 分支 / 事件分支 / 心跳），r<0（netlink 失败）不改状态——
+  一次网络抖动不算 utun 缺失。**fail_cnt>0 即"降级中"，替代原 tun_degraded 布尔
+  （v1.2.4 的 300ms 收紧语义已并入 stages[0]）。**
+- **P2 路由接管检测 10s → HIJACK_CHECK_MS=30s**：route_tun_hijacked 是最重 netlink 单点
+  （最多 4 次路由/规则 dump），纯 WARN 诊断 + status 读缓存 g_hijack_now，检测延迟
+  10s→30s 可接受，3 倍更少周期 dump。
+- **P3 接口挂载自愈 5s → RECONCILE_MS=15s**：仅事件漏收时的兜底（事件路径已即时对齐），
+  doze 冻结本身以分钟计，15s 延迟相对可忽略，3 倍更少周期 dump。
+- **已否决**：tun_sync 定向 RTM_GETLINK 快路径（省 ~80µs/s，不值新 netlink helper +
+  drift 检测正确性风险）；F1 的 2000ms poll 空闲回落上限不动（退避后空闲仍 0.5Hz 空醒，
+  属可接受的微损耗，改动引入 SIGCHLD 回收延迟权衡）。
+
 ## 网络切换
 - `iface_watch_poll>0` → `LOG_INFOF` + `iface_reconcile`（增量对齐挂载）。WiFi↔蜂窝切换走此路径。
   **v1.1.9：事件分支把 `iface_watch_poll` 已填好的快照直接传给把 `iface_reconcile`（快照透传），
-  避免 reconcile 再次全量 scan；5s 心跳/reload/首次挂载仍传 NULL（自扫一次）。**
-- **接口挂载自愈心跳（v1.1.7）**：主循环末尾另加 **5s 节流**的 `iface_reconcile` 无条件兜底
-  （`reconcile_last_ms`），与 tun_sync(v1.1.2) 同源思路——netlink watch socket 缓冲可能溢出、
-  进程在 doze 期间被冻结错过事件，**原"只在事件时 reconcile"会在事件漏收后把 eBPF 永久挂在
-  旧 ifindex**（attached=n 仍显示正常，分流静默失效；真机症状=长时间熄屏后无法代理）。
-  此心跳保证事件漏收时最多 5s 内自愈。幂等（无变化零开销，iface_scan <1ms）。
+  避免 reconcile 再次全量 scan；RECONCILE_MS 心跳（P3：5s→15s）/reload/首次挂载仍传 NULL（自扫一次）。**
+- **接口挂载自愈心跳（v1.1.7，P3：5s→15s）**：主循环末尾另加 **RECONCILE_MS=15s 节流**的
+  `iface_reconcile` 无条件兜底（`reconcile_last_ms`），与 tun_sync(v1.1.2) 同源思路——netlink
+  watch socket 缓冲可能溢出、进程在 doze 期间被冻结错过事件，**原"只在事件时 reconcile"会在
+  事件漏收后把 eBPF 永久挂在旧 ifindex**（attached=n 仍显示正常，分流静默失效；真机症状=
+  长时间熄屏后无法代理）。此心跳保证事件漏收时最多 15s 内自愈（doze 冻结本身以分钟计，
+  15s 兜底延迟可忽略，换取 3 倍更少周期 dump）。幂等（无变化零开销，iface_scan <1ms）。
   **附加核验**：`split_attach_iface` 的幂等去重在 v1.1.7 不再只信 `ctx->attached[]`，而是用
   `bpf_tc_query` 对照内核真实 filter（`split_filter_exists`，loader/MEMORY）——attached[] 是
   内存自认为状态，网卡上 filter 被外部清除（ifindex 不变）时只有这条路径能发现。
-  iface_plan 的"待挂接口数"日志已降为 DEBUG，避免每 5s 刷日志。
+  iface_plan 的"待挂接口数"日志已降为 DEBUG，避免每轮刷日志。
 - **tun 对齐（v1.1.2 起从事件分支移到心跳；v1.2.1 起事件分支恢复即时对齐）**：v1.1.2 曾统一走
   每轮循环末的 1s 节流心跳（见下节）、事件分支只做 `iface_reconcile` 以避免重复逻辑——但该方案
   让 mihomo 重载配置重建 utun 的 ifindex 漂移要等最多 1s+ 才被 map_tun 吸收，期间有静默丢包窗口。
@@ -140,11 +192,13 @@
   - **心跳兜底**：每轮 poll 循环末按 1s 节流无条件执行（`tun_sync_last_ms`），
     **不再依赖 poll 超时（rc==0）**——v1.1.2 起即如此（当时 poll 会因 DNS 学习器 fd 恒可读
     几乎不超时，旧"心跳只在超时分支"的方案兜底形同虚设；v1.4.0 移除学习器后 poll 常规 2s
-    超时，但"事件漏收时的静默丢包窗口"依然存在，兜底语义不变）。代价：每秒一次 rtnetlink
-    全量 dump（<1ms，可忽略）。
-    **v1.2.4 降级快重试**：`tun_sync` 返回 1（map_tun=0 降级中）时，心跳间隔由 1s
-    收紧到 `TUN_SYNC_DEGRADED_MS=300ms`（`tun_degraded` 标志，事件/reload/心跳三处
-    同步维护）——utun 重建回来后恢复代理最长等待 ≤300ms；正常状态保持 1s。
+    超时，但"事件漏收时的静默丢包窗口"依然存在，兜底语义不变）。代价：正常态每秒一次
+    rtnetlink 全量 dump（<1ms，可忽略）；降级期按 P1 退避降至最多 30s 一次。
+    **v1.2.4 降级快重试 / P1（2026-08）退避**：`tun_sync` 返回 1（map_tun=0 降级中）时，
+    心跳间隔收紧（`tun_sync_interval` 由 `tun_fail_cnt` 驱动，300ms→1s→5s→30s 封顶
+    递退，见"主循环 CPU"节）——瞬时抖动（重建 utun）恢复代理最长等待 ≤300ms；
+    持续缺失（mihomo 未运行）不再无限 3.3Hz 唤醒。fail_cnt>0 即降级中（v1.2.4 的
+    `tun_degraded` 布尔已并入，三处调用点统一走 `tun_sync_record`）；正常状态 1s。
   - **网络事件（v1.2.1 新增）**：`iface_watch_poll>0` 分支在 `iface_reconcile` 之后立即
     `tun_sync(ctx, cfg, &snap)` 复用已扫快照对齐 map_tun——mihomo **重载配置文件**重建
     utun（ifindex 漂移）正是走这条路径，原先要等下一轮 1s 心跳才对齐，期间 bpf_redirect
@@ -161,9 +215,10 @@
   - tun_device 接口不存在 → map_tun 置 0（BPF 侧 `tun_ifindex()==0` → `STAT_MISS_TUN` + `TC_ACT_OK` 放行保联网）；
   - ifindex 漂移 → 重写为新值并打日志；
   - **接口扫描失败（临时 netlink 错误）→ 跳过不动 map_tun**（避免误置 0 造成全量放行）。
-  - **返回契约（v1.2.4）**：0=已对齐/保持有效；1=降级（map_tun=0，utun 缺失）；
-    -1=扫描/写 map 失败（未动 map）。调用方（事件/reload/心跳）把 `r==1` 同步进
-    `tun_degraded` 以启用 300ms 降级快重试（见上）；`r<0` 不改变降级状态。
+  - **返回契约（v1.2.4 / P1 退避）**：0=已对齐/保持有效；1=降级（map_tun=0，utun 缺失）；
+    -1=扫描/写 map 失败（未动 map）。调用方（事件/reload/心跳）统一走 `tun_sync_record`：
+    `r==1` 递增 `tun_fail_cnt` 驱动降级退避（300ms→30s，见上）；`r<0` 不改变降级状态
+    （一次网络抖动不算 utun 缺失）。
    - **名字漂移兜底（v1.2.5/v1.2.6，真机修复 + 源码修正 / v1.2.8 收紧）**：mihomo 重载后新 TUN 可能不再叫配置名。
      v1.2.5 曾假设"sing-tun Linux 自动/回退名是 tunN"，但 **mihomo Alpha 源码核实（listener/sing_tun/
      sing_tun.go）**：`InterfaceName` 默认即 `"Meta"`，`device==""` 时 Linux 回退名是 **"Meta"**（`tunN`
@@ -213,7 +268,8 @@
 - **背景（真机教训）**：mihomo 配置若是 box 原样（auto-route:true），mihomo 会在 tun 挂
   default 路由并把 ip rule 指向其路由表 → **物理网卡 egress 的 eBPF 完全看不到流量**，
   direct_cn/proxy 停涨但 daemon 无任何报错——比"丢包"更难排查。
-- **机制**：主循环每 10s 节流 `route_tun_hijacked(tun_ifindex)`（netlink.c）；状态变化才打日志（接管→WARN，解除→INFO）。
+- **机制**：主循环每 `HIJACK_CHECK_MS`=30s（P2：10s→30s）节流 `route_tun_hijacked(tun_ifindex)`
+  （netlink.c，最重 netlink 单点，减 3 倍）；状态变化才打日志（接管→WARN，解除→INFO）。
   `ctl_status` 同时带出 `hijack` 字段 + WARN 行。
   **检测失败（netlink 错误/超时）返回 -1：daemon 本轮跳过不更新状态**（不误报、不误
   解除），status 的 hijack 字段如实显示 -1。

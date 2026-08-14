@@ -40,17 +40,54 @@
 /* v1.2.4：map_tun=0（utun 缺失）降级期间的心跳收紧间隔（毫秒）——
  * utun 重建回来后恢复代理的最长等待；正常状态心跳仍为 1s。 */
 #define TUN_SYNC_DEGRADED_MS 300
+/* P2/P3（2026-08 CPU 审查）：周期 netlink 兜底间隔——两者都须与 F1 poll 截止处
+ * 的对应常量一致（截止=心跳节流的唯一来源，见"主循环调度"节，改了节流不改截止
+ * 会让 poll 空醒/延迟心跳——v1.0.6 旧病）。 */
+#define RECONCILE_MS        15000   /* 接口挂载自愈兜底（P3：5s→15s，事件路径已兜快速响应） */
+#define HIJACK_CHECK_MS     30000   /* 路由接管检测（P2：10s→30s，WARN 诊断 + status 读缓存） */
 
 static volatile sig_atomic_t g_stop = 0;
 static int g_hijack_last = 0; /* v1.1.3 路由接管状态（变化才打日志） */
 /* v1.2.8（审查修复）：最近一次 route_tun_hijacked 的原始结果（含 -1=检测失败）。
- * 主循环每 10s 更新；ctl_status 读它而非同步重跑 netlink dump——status 命令不再
- * 在 ctl_serve 里阻塞主循环最多 4×2s（同步 2~4 次 dump 会让 ctl/网络事件/CNIP 调度
- * 全部停摆）。至多 10s 陈旧，对状态展示可接受。 */
+ * 主循环每 HIJACK_CHECK_MS（P2：10s→30s）更新；ctl_status 读它而非同步重跑
+ * netlink dump——status 命令不再在 ctl_serve 里阻塞主循环最多 4×2s（同步 2~4 次
+ * dump 会让 ctl/网络事件/CNIP 调度全部停摆）。至多 30s 陈旧，对状态展示可接受。 */
 static int g_hijack_now = 0;
 /* tun_sync 前向声明：ctl_serve（reload 分支）与主循环事件分支都要在定义前调用 */
 static int tun_sync(struct split_bpf_ctx *ctx, const struct split_config *cfg,
                     const struct iface_list *snap);
+
+/* P1（2026-08 CPU 审查）：utun 长期缺失时降级重试退避——连续失败按
+ * 300ms→1s→5s→30s 封顶递退，避免 mihomo 未运行等持续场景无限 3.3Hz 唤醒
+ * （v1.2.4 的 300ms 快重试只对瞬时抖动成立，长期缺失是耗电/唤醒损耗）；
+ * 任一成功（fail_cnt=0）立即回到正常 1s。本函数是心跳节流条件与 F1 poll 截止
+ * 的**唯一**间隔来源，二者必须一致（详见"主循环调度"节）。 */
+static long long tun_sync_interval(int fail_cnt)
+{
+    static const long long stages[] = {
+        TUN_SYNC_DEGRADED_MS, 1000LL, 5000LL, 30000LL
+    };
+    int idx;
+
+    if (fail_cnt <= 0)
+        return 1000LL; /* 正常态（含从未降级）心跳间隔 */
+    idx = fail_cnt - 1;
+    if (idx >= (int)(sizeof(stages) / sizeof(stages[0])))
+        idx = (int)(sizeof(stages) / sizeof(stages[0])) - 1;
+    return stages[idx];
+}
+
+/* P1：tun_sync 结果 → 降级失败计数。r=0 正常（清零）；r=1 降级（fail_cnt 递增
+ * 驱动退避）；r<0（netlink 检测失败）不改状态——一次网络抖动不算 utun 真实缺失，
+ * 沿用上次间隔。fail_cnt>0 即"降级中"，不再单设 tun_degraded 布尔（冗余）。 */
+static void tun_sync_record(int r, int *fail_cnt)
+{
+    if (r < 0)
+        return;
+    *fail_cnt = (r == 1) ? *fail_cnt + 1 : 0;
+    if (*fail_cnt > 16)
+        *fail_cnt = 16; /* 退避在 fail_cnt>=4 已封顶；仅防整形溢出 */
+}
 /* CNIP 写锁（H2 显式化）：
  * CNIP map（map_cnip4/6）的写入方只有 fork 子进程一个（三种触发共用），
  * 主线程永不同步重灌——
@@ -202,7 +239,7 @@ static void ctl_status(int c, struct split_bpf_ctx *ctx)
     if (map_get_tun(ctx, &tun_u) == 0)
         tun = (int)tun_u;
     map_cnip_count(ctx, &n4, &n6);
-    /* v1.2.8：读主循环 10s 节流缓存的路由接管检测结果，不在 ctl 路径同步重跑
+    /* v1.2.8：读主循环 HIJACK_CHECK_MS 节流缓存的路由接管检测结果，不在 ctl 路径同步重跑
      * netlink dump（最多 4×2s 阻塞）。hijack_now 含 -1=检测失败（如实显示）。 */
     hijack = g_hijack_now;
     ctl_reply(c, "OK prog_fd=%d attached=%d tun=%d cnip4=%u cnip6=%u hijack=%d",
@@ -299,7 +336,7 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
                      struct split_config *cfg,
                      long long *cnip_next_ms,
                      struct rule_overrides *rov,
-                     int *tun_degraded,
+                     int *tun_fail_cnt,
                      int c)
 {
     char cmd[512];
@@ -430,9 +467,16 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         /* v1.0.6：真正重读配置文件（docs/04 契约：reload = 读配置 → 重写 map）。
          * 重读失败则沿用内存配置继续重放（避免"改了配置但规则没同步"）。 */
         if (config_load(cfg_path, cfg) == 0) {
-            if (cfg->cnip_auto_update_hours > 0)
-                *cnip_next_ms = now_ms() +
+            /* F3（2026-08 调度审查）：只把 cnip_next_ms 提前、不推后——若 boot_once
+             * 补拉已排期（now+5s）或补拉失败在 5 分钟重试窗口，旧实现把定时器重置为
+             * now+hours 会让 CNIP 缺失自愈/重试被静默取消（最多推迟 24h）。config 把
+             * hours 改大想"从新配置时刻重启定时器"时，min 只会让它提前触发一次，无害。 */
+            if (cfg->cnip_auto_update_hours > 0) {
+                long long t = now_ms() +
                     (long long)cfg->cnip_auto_update_hours * 3600000LL;
+                if (t < *cnip_next_ms)
+                    *cnip_next_ms = t;
+            }
             /* v1.2.8（审查修复）：debug 从 true 改 false 时恢复 INFO——旧实现只
              * 在 debug=true 时升到 DEBUG、永不降回，误配排查时日志一直刷屏。 */
             g_log_level = cfg->debug ? LOG_DEBUG : LOG_INFO;
@@ -447,12 +491,12 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         iface_reconcile(ctx, cfg, NULL);
         /* v1.2.1：reload 后立即对齐 map_tun（不等 1s 心跳）。若 mihomo 也已
          * 重载配置重建 utun，ifindex 漂移在此处第一时间修正，缩小静默丢包窗口。
-         * v1.2.4：返回值同步 tun_degraded（utun 缺失时心跳收紧快重试）。 */
+         * v1.2.4：返回值同步降级状态（utun 缺失时心跳收紧快重试）。
+         * P1（2026-08 CPU 审查）：tun_sync_record 统一维护降级失败计数（退避）。 */
         {
             int r = tun_sync(ctx, cfg, NULL);
 
-            if (r >= 0)
-                *tun_degraded = (r == 1);
+            tun_sync_record(r, tun_fail_cnt);
         }
         ctl_reply(c, "OK");
         ctl_reply(c, "END");
@@ -798,8 +842,12 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
     long long cnip_next_ms = 0;
     long long tun_sync_last_ms = 0;
     long long reconcile_last_ms = 0;
-    long long hijack_last_ms = 0; /* 路由接管检测节流（10s） */
-    int tun_degraded = 0; /* v1.2.4：map_tun=0（utun 缺失）降级中 → 心跳收紧到 300ms 快重试 */
+    long long hijack_last_ms = 0; /* 路由接管检测节流（HIJACK_CHECK_MS=30s） */
+    /* v1.2.4：map_tun=0（utun 缺失）降级中心跳收紧快重试。
+     * P1（2026-08 CPU 审查）：降级连续失败计数，驱动 tun_sync_interval 退避
+     * （300ms→1s→5s→30s 封顶）；成功清零。fail_cnt>0 即"降级中"（替代原
+     * tun_degraded 布尔，由 tun_sync_record 统一维护）。 */
+    int tun_fail_cnt = 0;
     struct rule_overrides rov;   /* v1.2.0：运行时规则偏差（add-rule/del-rule，reload 后保留） */
     int cnip_boot_once = 0;       /* v1.1.3：CNIP 缺失补拉（一次） */
     pid_t cnip_pid = 0; /* CNIP 更新子进程（见主循环 fork 注释） */
@@ -929,7 +977,6 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
             } else {
                 LOG_INFOF("CNIP 定时自动更新（每 %d 小时）", cfg.cnip_auto_update_hours);
             }
-            g_cnip_req = CNIP_REQ_NONE; /* 一次请求 fire 一次；失败不自动重试（用户可再点） */
             g_cnip_busy = 1; /* 置忙：fork 期间与灌入期间拒绝 reload-cnip/update-cnip（防双写） */
             cnip_pid = fork();
             if (cnip_pid == 0) {
@@ -955,8 +1002,12 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 g_cnip_busy = 0; /* fork 失败：从未进入子进程，解除忙标志 */
                 /* boot_once 不清零：保证 hours=0 时补拉仍会重试（否则
                  * 条件 (hours>0 || boot_once) 恒 false，补拉被永久吞掉） */
+                /* F4（2026-08 调度审查）：g_cnip_req 也不清——fork 失败保留手动请求，
+                 * 60s 后仍按原请求类型 fire（否则 hours==0 时 update-cnip / reload-cnip
+                 * 请求被静默吞掉，用户已收到"已安排"却永不执行） */
                 cnip_next_ms = now_ms() + 60000LL;
             } else {
+                g_cnip_req = CNIP_REQ_NONE; /* F4：fire 成功才清——一次请求 fire 一次 */
                 LOG_INFOF("CNIP 更新已派生子进程 pid=%d", cnip_pid);
             }
         }
@@ -995,7 +1046,42 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
         if (lfd >= 0) { fds[nfds].fd = lfd; fds[nfds].events = POLLIN; lfd_idx = nfds; nfds++; }
         if (evfd >= 0) { fds[nfds].fd = evfd; fds[nfds].events = POLLIN; evfd_idx = nfds; nfds++; }
 
-        rc = poll(fds, nfds, 2000);
+        /* F1（2026-08 调度审查）：poll 超时自适应到最近定时器截止时刻——
+         * 原固定 2000ms 把 <2s 的节流钉死在 2s 步长：降级 300ms 心跳 / 1s 心跳 /
+         * CNIP 手动请求在"事件漏收（心跳兜底的目标场景）"下实际周期是 2s，
+         * "恢复代理最长等待 ≤300ms"（TUN_SYNC_DEGRADED_MS 注释）无法成立。
+         * 下一定时器截止取：tun_sync（tun_sync_interval，P1 退避后可能 >1s）、
+         * reconcile RECONCILE_MS（P3：5000→15000）、hijack HIJACK_CHECK_MS
+         * （P2：10000→30000）、cnip_next_ms——仅当会 fire 才纳入（fork 条件门开且无子进程
+         * 在跑；子进程运行中 fork 被 cnip_pid==0 挡住，纳入会让 poll(0) 空转忙循环）。
+         * 到期即 poll(0) 立刻返回，由下方节流块执行；空闲时仍回落到 2000ms。
+         * 三个兜底心跳的截止必须与其节流条件同源（见下方宏/函数），否则 poll 提前
+         * 空醒或把心跳延迟到截止——v1.0.6 旧病。 */
+        {
+            long long now = now_ms();
+            long long deadline = now + 2000;
+
+            if ((cfg.cnip_auto_update_hours > 0 || cnip_boot_once ||
+                 g_cnip_req != CNIP_REQ_NONE) && cnip_pid == 0 &&
+                cnip_next_ms < deadline)
+                deadline = cnip_next_ms;
+            {
+                long long t = tun_sync_last_ms + tun_sync_interval(tun_fail_cnt);
+                if (t < deadline)
+                    deadline = t;
+            }
+            {
+                long long t = reconcile_last_ms + RECONCILE_MS;
+                if (t < deadline)
+                    deadline = t;
+            }
+            {
+                long long t = hijack_last_ms + HIJACK_CHECK_MS;
+                if (t < deadline)
+                    deadline = t;
+            }
+            rc = poll(fds, nfds, (int)(deadline > now ? deadline - now : 0));
+        }
         if (rc < 0) {
             if (errno == EINTR)
                 continue;
@@ -1024,7 +1110,7 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 int c = accept(lfd, NULL, NULL);
                 if (c >= 0) {
                     ctl_serve(&ctx, cfg_path, &cfg, &cnip_next_ms, &rov,
-                              &tun_degraded, c);
+                              &tun_fail_cnt, c);
                     close(c);
                 }
                 if (g_stop)
@@ -1040,12 +1126,12 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                      * 快照对齐 map_tun——否则要等 1s 心跳，期间 bpf_redirect 指向
                      * 陈旧 ifindex 被 __skb_do_redirect 静默丢包（海外全挂）。
                      * v1.2.4：tun_sync 内会对缺 utun 的快照做权威复核（见函数注释），
-                     * 返回值同步维护 tun_degraded 供心跳降级快重试。 */
+                     * 返回值同步降级状态供心跳快重试。
+                     * P1（2026-08 CPU 审查）：tun_sync_record 统一维护降级失败计数。 */
                     {
                         int r = tun_sync(&ctx, &cfg, &snap);
 
-                        if (r >= 0)
-                            tun_degraded = (r == 1);
+                        tun_sync_record(r, &tun_fail_cnt);
                     }
                     tun_sync_last_ms = now_ms();
                 }
@@ -1055,42 +1141,46 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
         /* 心跳兜底：tun 存活同步不依赖 poll 超时（每轮循环节流执行，而非只在
          * poll 超时分支）。mihomo 重建 utun 且 netlink 事件漏收时 map_tun 残留
          * 旧 ifindex，代理流量被内核 __skb_do_redirect kfree_skb 静默丢弃
-         * （v1.0.6 故障面）。代价：每秒一次 rtnetlink 全量 dump（<1ms）。事件路径
+         * （v1.0.6 故障面）。代价：间隔一次 rtnetlink 全量 dump（<1ms）。事件路径
          * （见上）已第一时间复用快照对齐，此处是事件漏收时的兜底。
-         * v1.2.4：utun 缺失降级期间（tun_degraded=1）把间隔从 1s 收紧到 300ms——
-         * mihomo 重载重建 utun 时若 NEWLINK 事件漏收，恢复代理的等待从 ≤1s 缩到
-         * ≤300ms，缩小"代理完全失效"的窗口；正常状态仍 1s。 */
+         * v1.2.4：utun 缺失降级期间把间隔从 1s 收紧到 300ms——mihomo 重载重建
+         * utun 时若 NEWLINK 事件漏收，恢复代理的等待从 ≤1s 缩到 ≤300ms，缩小
+         * "代理完全失效"的窗口；正常状态仍 1s。
+         * P1（2026-08 CPU 审查）：降级退避——连续失败按 300ms→1s→5s→30s 封顶
+         * 递退（mihomo 长时间未运行时不再无限 3.3Hz 唤醒）；任一成功立即回正常
+         * 1s。间隔来源统一走 tun_sync_interval(tun_fail_cnt)，与 F1 poll 截止一致。 */
         {
             long long now = now_ms();
             int r;
 
-            if (now - tun_sync_last_ms >=
-                (tun_degraded ? TUN_SYNC_DEGRADED_MS : 1000)) {
+            if (now - tun_sync_last_ms >= tun_sync_interval(tun_fail_cnt)) {
                 r = tun_sync(&ctx, &cfg, NULL);
-                if (r >= 0)
-                    tun_degraded = (r == 1);
+                tun_sync_record(r, &tun_fail_cnt);
                 tun_sync_last_ms = now;
             }
         }
 
-        /* 接口挂载自愈心跳（v1.1.7，5s 节流）：iface_reconcile 原先只在 netlink
-         * 事件（iface_watch_poll>0）时执行——熄屏 doze / 弱网下事件可能被内核
+        /* 接口挂载自愈心跳（v1.1.7，P3：5s→15s 节流）：iface_reconcile 原先只在
+         * netlink 事件（iface_watch_poll>0）时执行——熄屏 doze / 弱网下事件可能被内核
          * 丢进 watch socket 缓冲溢出、或整个进程被冻结错过事件，导致 eBPF 永久
          * 挂在旧 ifindex（attached=n 仍显示正常）→ 分流静默失效（真机症状：
          * 长时间熄屏后无法代理，mihomo 只剩自身 DNS 连接）。
          * 与 tun_sync 同源思路（v1.1.2）：改为周期兜底自愈（幂等，无变化零开销；
-         * iface_scan 全程 <1ms，5s 一次可忽略）。netlink 事件路径保留（触达更快），
-         * 此心跳保证事件漏收时最多 5s 内自愈。 */
-        if (now_ms() - reconcile_last_ms >= 5000) {
+         * iface_scan 全程 <1ms）。netlink 事件路径保留（触达更快），此心跳保证
+         * 事件漏收时最多 RECONCILE_MS（15s）内自愈——doze 冻结本身以分钟计，
+         * 15s 兜底延迟相对可忽略，换来 3 倍更少的周期 dump。 */
+        if (now_ms() - reconcile_last_ms >= RECONCILE_MS) {
             iface_reconcile(&ctx, &cfg, NULL);
             reconcile_last_ms = now_ms();
         }
 
-        /* 路由接管检测（v1.1.3，10s 节流）：mihomo 若被改回 auto-route:true
+        /* 路由接管检测（v1.1.3，P2：10s→30s 节流）：mihomo 若被改回 auto-route:true
          * 或用户手动加路由把 default 指向 tun，物理网卡 egress 的 eBPF 立刻
          * 失明（direct_cn/proxy 停涨但无报错）。检测到变化立即打 WARN，
-         * 让"静默失效"变成可查日志；splitctl status 也会带出 hijack 标记。 */
-        if (now_ms() - hijack_last_ms >= 10000) {
+         * 让"静默失效"变成可查日志；splitctl status 也会带出 hijack 标记。
+         * 纯 WARN 诊断（status 读缓存 g_hijack_now），检测延迟 10s→30s 可接受，
+         * 换来 3 倍更少的周期路由/规则 dump（route_tun_hijacked 是最重的 netlink 单点）。 */
+        if (now_ms() - hijack_last_ms >= HIJACK_CHECK_MS) {
             uint32_t tun_u = 0;
             int tun = 0, h;
 

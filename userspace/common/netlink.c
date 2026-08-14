@@ -259,9 +259,13 @@ int route_tun_hijacked(int tun_ifindex)
 
     /* 防御：recv 必须有超时。正常 dump 以 NLMSG_DONE 收尾，但极端情况
      * （内核异常/命名空间损坏）可能收不到——daemon 主循环是同步调用本函数，
-     * 永久阻塞=整个 splitd 停摆（v1.1.3 审查加固）。2s 超时足够（路由 dump <1ms）。 */
+     * 永久阻塞=整个 splitd 停摆（v1.1.3 审查加固）。
+     * F2（2026-08 调度审查）：超时从 2s 收紧到 300ms——本函数在主循环同步跑
+     * （10s 节流），最坏 v4+v6 路由 dump + 规则 dump 共 4 个阶段 × 超时 = 8s 停摆，
+     * 期间 tun_sync / CNIP fork / ctl 全冻结。正常 dump <1ms，300ms 余量充足；
+     * 异常时把主循环停摆压到 ~1.2s。 */
     {
-        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 300000 };
 
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     }
@@ -422,10 +426,12 @@ int iface_scan(struct iface_list *list)
     /* 防御：recv 必须有超时（与 route_tun_hijacked 一致，v1.1.3 加固）。
      * 正常 dump 以 NLMSG_DONE 收尾，但内核异常/命名空间损坏时可能收不到——
      * 本函数被 daemon 的 tun_sync 每秒调用 + 每次网络事件调用，
-     * 永久阻塞=整个 splitd 停摆。2s 超时足够（接口 dump <1ms），
-     * 超时按失败处理（调用方保持 map 原值，不误清）。 */
+     * 永久阻塞=整个 splitd 停摆。
+     * F2（2026-08 调度审查）：超时从 2s 收紧到 300ms——比 route_tun_hijacked
+     * 更频繁（每 1s 心跳都调），2s 超时在 netlink 异常时让主循环每轮停摆 2s；
+     * 接口 dump <1ms，300ms 余量充足，超时按失败处理（调用方保持 map 原值，不误清）。 */
     {
-        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 300000 };
 
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     }

@@ -143,9 +143,9 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 | netlink 扫不到接口 | iface_scan 先 bind() |
 | config `tun0\n` 匹配失败 | str_trim_tail() 清尾空白 |
 | mihomo 收不到 redirect 包 | `skb->queue_mapping=0` |
-| 熄屏/doze 后代理失效、mihomo 只剩自身 DNS | v1.1.7 双重自愈：daemon 主循环 5s 节流 `iface_reconcile`（防 netlink 事件漏收导致挂载陈旧，`split_attach_iface` 幂等去重经 `bpf_tc_query` 核验 filter 真实存在，丢失即重挂）+ `split-watchdog.sh` 探活拉起（防 splitd 进程死亡后 map_tun 无人维护）。停止闸收敛到 `splitctl stop/start`（`gate_set/gate_clear`），任意 stop 路径统一防"刚 stop 又被拉起" |
+| 熄屏/doze 后代理失效、mihomo 只剩自身 DNS | v1.1.7 双重自愈：daemon 主循环 15s 节流 `iface_reconcile`（P3：5s→15s，防 netlink 事件漏收导致挂载陈旧，`split_attach_iface` 幂等去重经 `bpf_tc_query` 核验 filter 真实存在，丢失即重挂）+ `split-watchdog.sh` 探活拉起（防 splitd 进程死亡后 map_tun 无人维护）。停止闸收敛到 `splitctl stop/start`（`gate_set/gate_clear`），任意 stop 路径统一防"刚 stop 又被拉起" |
 | splitd 存活但 mihomo TUN 消失（map_tun=0、代理全放行直连） | **v1.2.9：`split-watchdog.sh` 探活分支解析 `tun=` 字段**——连续 2 轮为 0 且 `bin/mihomo` 存在 → 先经 mihomo API 无感恢复 `tun.enable`（`PATCH /configs`），API 失败重启 mihomo，恢复后 5 分钟冷却。真机症状（miss_tun 持续增长却无报错）见 USAGE.md Q8 |
-| mihomo auto-route 接管路由 → 分流静默失效 | daemon 每 10s 检测路由接管（status hijack 字段）+ service.sh/WebUI 启动前 fix-mihomo-tun.sh 幂等修复 |
+| mihomo auto-route 接管路由 → 分流静默失效 | daemon 每 30s 检测路由接管（P2：10s→30s，status hijack 字段）+ service.sh/WebUI 启动前 fix-mihomo-tun.sh 幂等修复 |
 | CNIP 文件缺失 → direct_cn 恒 0 无报错 | status 报 cnip4/6 条数（0=缺失）+ 配 url 时启动自动补拉一次 |
 | mihomo gso 不兼容 | 保持 gso:false + stack:gvisor |
 
