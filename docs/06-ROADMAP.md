@@ -94,7 +94,14 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.3（当前）        CNIP 默认源换 mihomo 生态权威源 Loyalsoldier/geoip + 混合文件按族加载：
+v1.4.4（当前）        CNIP 加载诊断改进（2026-08 CNIP 审查 P3 修理）：
+                      ①下载校验按失败形态区分日志：bad>0 → "N 行非法（疑似错误页/垃圾）"；
+                        bad==0 → "空或全为另一地址族行（检查 url 配错族）"（v1.4.3 族过滤
+                        使异族行不计 bad，二者不再同报"疑似错误页"）
+                      ②本地加载 0 条显式 LOG_WARNF：文件空/全为另一族/全非法不再被 INFO 掩盖
+                        （如 v4-only 文件配到 v6）；行为零变化，纯诊断
+                      ③版本号 1.4.4（bump-version.sh）
+v1.4.3        CNIP 默认源换 mihomo 生态权威源 Loyalsoldier/geoip + 混合文件按族加载：
                       ①**默认源换权威**：v4/v6 都指向 `Loyalsoldier/geoip` `release/text/cn.txt`
                         （mihomo 生态默认 GeoIP，每日更新；实测 v4=4145 / v6=1235 条，纯 CIDR
                         无注释，v6 与旧 gaoyifan 完全一致=零损失，v4 较 chnroutes2 的 3908 更全）。

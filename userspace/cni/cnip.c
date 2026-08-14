@@ -119,6 +119,12 @@ static int cnip_from_path(struct split_bpf_ctx *ctx, const char *path, int famil
     fclose(fp);
     LOG_INFOF("CNIP(%s) 导入完成: %u 条, 失败 %u 条 (%s)",
               family == AF_INET ? "v4" : "v6", ok, bad, path);
+    /* v1.4.4（审查修复）：加载 0 条时显式告警——文件空/全为另一族/全非法。
+     * 族过滤把异族行跳过不计 bad，故 v4-only 文件配到 v6 等错配会 ok=bad=0，
+     * 仅靠上面的 INFO 不易察觉。 */
+    if (ok == 0)
+        LOG_WARNF("CNIP(%s) 加载 0 条：文件为空/全为另一地址族/全非法，请检查 %s",
+                  family == AF_INET ? "v4" : "v6", path);
     return 0;
 }
 
@@ -268,7 +274,15 @@ static int cnip_try_url(struct split_bpf_ctx *ctx, const char *url,
         LOG_INFOF("CNIP(%s) 下载并解析: %u 条, 失败 %u 条 (%s)",
                   family == AF_INET ? "v4" : "v6", ok, bad, url);
         if (ok == 0) {
-            LOG_ERRORF("下载内容无有效 CIDR（疑似错误页/空文件），弃用: %s", tmp_path);
+            /* v1.4.4（审查修复）：区分失败形态——bad>0 是真非法行（错误页/垃圾内容）；
+             * bad==0 是空文件或"全为另一地址族行"（如 v4 源配到 v6、源换格式，族过滤
+             * 把异族行跳过不计 bad）。两者都弃用（沿用本地旧文件），仅日志更可诊断。 */
+            if (bad > 0)
+                LOG_ERRORF("下载内容无有效 CIDR（%u 行非法，疑似错误页/垃圾），弃用: %s",
+                           bad, tmp_path);
+            else
+                LOG_ERRORF("下载内容为空或全为另一地址族行（检查 url 是否配错族），弃用: %s",
+                           tmp_path);
             return -1;
         }
     }

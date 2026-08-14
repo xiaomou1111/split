@@ -71,6 +71,9 @@
    对外部 `fetch-cnip.sh` 的拆分输出（纯族文件）零影响（全行同族，无跳过）。历史源已弃用：
    v4 misakaio/chnroutes2（每日 APNIC 聚合 3908 条）、v6 gaoyifan/china-operator-ip（1235 条）。
    CFG_STRLEN 保持 256（新双候选 URL 实测 139 字符，v4/v6 同串）。
+   **v1.4.4（审查 P3 修理，纯诊断）**：族过滤使异族行不计 bad——下载校验 `ok==0` 时按
+   bad>0 区分"非法行/错误页" vs "空/全异族"（日志更可诊断）；本地加载 `cnip_from_path`
+   ok==0 时显式 LOG_WARNF（v4-only 文件配到 v6 等错配不再被 INFO 掩盖）。行为零变化。
 
 ## 验证
 - fetch-cnip 下载后 daemon 启动/`reload-cnip`；统计 `direct_cn` 增长即为生效。
