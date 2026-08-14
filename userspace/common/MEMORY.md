@@ -68,6 +68,11 @@
    **v1.2.8（审查修复）：改用 `recvmsg` 并检查 `MSG_TRUNC`**——旧 `recv` 对超缓冲的单条 netlink
    消息返回截断长度且无迹象，`NLMSG_OK` 会按半截数据解析（可能漏判/错判事件）。截断时保守视为
    "有变化"（reconcile 幂等，多一次对齐无害）并丢弃本条继续收拢。
+   **v1.4.5（首次真编译修复）：消息循环从 `NLMSG_OK(nlh,len)` 改手工边界循环**——宏内
+   `nlh->nlmsg_len <= (len)` 是 `__u32` 与 `int` 比较，`-Werror -Wsign-compare` 下是硬错误；
+   arm64 交叉 CFLAGS 无 `-Werror` 只降为警告，故此前各提交"静态审查+交叉构建"都没暴露，直到
+   v1.4.5 首次原生 `make userspace` 实编。改与本文件 `iface_scan`/`rule_dump` 同款
+   `off += NLMSG_ALIGN(nlmsg_len)` + 越界 break，语义不变。
 - 坑 3：**`iface_scan` 必须先 `bind()` 再 `send`/`recv`**（v1.0.2 修复：此前缺 bind，内核不投递应答，`iface_index_by_name` 恒失败 → splitd 报"找不到 tun 设备"）。
 - 坑 4（v1.0.2 真机修复）：**exclude 列表必须含 `"utun"`**——mihomo 的 tun 设备常叫 `utun`，而 `utun` 不以 `"tun"` 开头（前缀 `utu`），只匹配 `"tun"` 会导致 utun 被当物理接口挂载 → mihomo 回写流量再次进 eBPF → **回环 + parse_err 暴涨**。exclude 现含 lo/tun/utun/tap/dummy/sit/ip6tnl/gre/ifb/tunl/wifi-aware/p2p/r_rmnet 等。
 - 坑 8（v1.1.5 真机修复）：**exclude 必须含 `"rmnet_ipa"`**——rmnet_ipa0 是 Qualcomm IPA 聚合口（ARPHRD_RAWIP 519），帧带 RMNET MAP 封装头（非裸 IP，tcpdump filter 都匹配不上），且数据面实际走 rmnet_data* 子接口。此前它被当物理接口挂载 → 其 MAP 帧全部 parse 失败 → parse_err 持续暴涨（蜂窝断海外流量排查的噪音源）。
@@ -113,6 +118,12 @@
      该字段的小表；>255 大表内核必须走 RTA_TABLE 属性，先读属性）。
   验证（WSL2 + dummy utun）：基线 hijack=0；`oif utun`+私有表路由=0（不误报）；无条件
   `from all lookup 2022`→含 default 的表=1（正确识别）。
+- 坑 9（v1.4.5 首次真编译修复）：**`rule_steals_table` 引用的 `FRA_DSCP`/`FRA_FLOWLABEL`/
+  `FRA_FLOWLABEL_MASK` 依赖内核 6.9 头**——这三个常量 6.9 才进 `linux/fib_rules.h`，Ubuntu
+  24.04（6.8）等旧工具链直接引用编译失败。修复：缺失时 `#ifndef` 补 mainline 枚举值
+  （DSCP=25/FLOWLABEL=26/FLOWLABEL_MASK=27，落在 6.8 的 `__FRA_MAX` 之后不与旧枚举冲突）。
+  旧内核运行时不会发出这些属性，命中分支等价"不可能"，行为与新头完全一致。**勿改回 `#ifdef`
+  版本号判断**——`#ifdef` 对枚举常量恒假，只能走宏兜底。
 - 坑 7（v1.1.4）：**`config_load` 先 fopen 再 `config_defaults`**——此前 defaults 在 fopen 前执行，
   文件打不开时调用方 cfg 已被重置成默认值，daemon reload 的"失败沿用内存配置"实际变成
   "重放默认规则"（自定义 proxy/direct/skip_uid 全丢）。修复后打开失败 cfg 保持原样。
@@ -130,3 +141,6 @@
 - **v1.2.0（L4）：`userspace/Makefile` 的 CFLAGS 追加 `-Werror`**（与 kernel/Makefile 对齐）——任何
   新增告警即编译失败，防脏告警累积。在 Linux 上 `make userspace` 如有既有告警暴露需先修（本轮
   已静态审查，若构建仍报碍则就地解决再提交）。
+- **v1.4.5（首次真编译）**：本仓库用户态在 WSL2 Ubuntu 24.04（6.8 内核头）首次 `make userspace`
+  实编，暴露并修复两处潜伏错误（`FRA_*` 6.9 头缺失 + `NLMSG_OK` 符号比较，见上坑 2/坑 9）。
+  此后任何涉及 common 的改动必须 `make userspace`（-Werror）实编验证，勿再以"静态审查代替编译"。

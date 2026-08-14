@@ -13,6 +13,21 @@
 
 #include "log.h"
 
+/* FRA_DSCP/FRA_FLOWLABEL/FRA_FLOWLABEL_MASK 是内核 6.9 才进
+ * linux/fib_rules.h 的规则选择器属性（DSCP / IPv6 FlowLabel 匹配）。
+ * Ubuntu 24.04（6.8 内核头）等旧工具链没有这些常量，直接引用会编译失败
+ * ——本项目 v1.4.x 各提交一直"编译待 Linux make userspace"，首次真编译才
+ * 暴露。此处仅在缺失时补 mainline 枚举值（DSCP=25/FLOWLABEL=26/
+ * FLOWLABEL_MASK=27，落在 6.8 的 __FRA_MAX 之后，与旧枚举不冲突）：
+ * 旧内核运行时根本不会发出这类属性，命中分支等价"不可能"，行为与新版
+ * 头完全一致；6.9+ 头存在则走真实枚举（数值相同）。注：#ifdef 对枚举
+ * 常量恒假，故用 #ifndef 宏兜底，不可改用 #ifdef 版本号判断。 */
+#ifndef FRA_DSCP
+#define FRA_DSCP 25
+#define FRA_FLOWLABEL 26
+#define FRA_FLOWLABEL_MASK 27
+#endif
+
 int iface_is_physical(const struct iface *i)
 {
     /* 排除虚拟/特殊接口（前缀匹配，含 "utun" 这类以 ut 开头的 tun 变体）。
@@ -521,6 +536,7 @@ int iface_watch_poll(int fd, struct iface_list *snapshot)
     struct msghdr msg;
     struct iovec iov;
     int len;
+    int off = 0;
     int changed = 0;
     struct nlmsghdr *nlh;
 
@@ -545,8 +561,17 @@ int iface_watch_poll(int fd, struct iface_list *snapshot)
             changed = 1; /* 消息被截断：按"有变化"处理，不解析本条 */
             continue;
         }
-        for (nlh = (struct nlmsghdr *)buf; NLMSG_OK(nlh, len);
-             nlh = NLMSG_NEXT(nlh, len)) {
+        /* 与 iface_scan/rule_dump 同款手工边界循环（勿改回 NLMSG_OK）：
+         * 宏内 `nlh->nlmsg_len <= (len)` 是 __u32 与 int 比较，
+         * -Wsign-compare 在 -Werror 下是硬错误（arm64 交叉无 -Werror
+         * 只降为警告，原生路径直接编译失败，首次真编译暴露）。MSG_TRUNC
+         * 已在上方处理，buf 内的消息长度恒有效。 */
+        for (off = 0; (size_t)off + sizeof(struct nlmsghdr) <= (size_t)len;
+             off += NLMSG_ALIGN(nlh->nlmsg_len)) {
+            nlh = (struct nlmsghdr *)(buf + off);
+            if (nlh->nlmsg_len < sizeof(struct nlmsghdr) ||
+                (size_t)off + NLMSG_ALIGN(nlh->nlmsg_len) > (size_t)len)
+                break;
             if (nlh->nlmsg_type == RTM_NEWLINK || nlh->nlmsg_type == RTM_DELLINK)
                 changed = 1;
         }
