@@ -74,7 +74,7 @@ rules:
 cnip:
   path_v4: /data/adb/split/config/cn_cidr_v4.txt   # 本地文件，每行 A.B.C.D/N
   path_v6: /data/adb/split/config/cn_cidr_v6.txt
-  url_v4: https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt
+  url_v4: https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt
   url_v6: https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt
   auto_update_hours: 24       # 0=不自动更新；默认 24(每天)
 ```
@@ -85,7 +85,11 @@ cnip:
 > 到 `path_v4/v6` 覆盖本地文件，再全量重灌 `map_cnip4/6`（先清空后写入，幂等）。
 > 下载器探测顺序：curl → wget/busybox（绝对路径优先，回落 PATH；Android Magisk 环境通常
 > 没有 curl，有 busybox 即可，见 cni/MEMORY）。下载失败 / HTTP 错误 / 内容 0 条时**沿用本地
-> 旧文件**，不覆盖不重灌（不会把 CNIP 清空归零）。无任何下载器时留空 url、只按间隔重读本地
+> 旧文件**，不覆盖不重灌（不会把 CNIP 清空归零）。
+> 默认源（2026-08 更换 v4）：v4 `misakaio/chnroutes2`（每日 APNIC 聚合，约 3900 条）、
+> v6 `gaoyifan/china-operator-ip`（每日）。大陆网络访问 raw.githubusercontent.com 困难时，
+> url 可换 jsDelivr 镜像（`https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>`，
+> 如 v4 `.../gh/misakaio/chnroutes2@master/chnroutes.txt`、v6 `.../gh/gaoyifan/china-operator-ip@ip-lists/china6.txt`）。无任何下载器时留空 url、只按间隔重读本地
 > 文件，或外部脚本跑 `fetch-cnip.sh` + `splitctl reload-cnip`；`splitctl update-cnip`
 > （v1.4.1 手动更新）与自动更新同路径。
 > Android 可直接复用 box 的 `cn.zone`/`cn_ipv6.zone` 改名后用（每行 CIDR，格式兼容）。

@@ -27,8 +27,16 @@
   修复"只加载不清理"的坑；注意会一并删掉该网卡原有 clsact。
 
 ## fetch-cnip.sh
-- v4 源：17mon `china_ip_list.txt`（每行 CIDR，LF）。
-- v6 源：gaoyifan `china6.txt`（**首行可能是注释**，用 grep 过滤 `^[0-9a-fA-F:]+/[0-9]+` 后 `mv` 回原名）。
+- 默认源（**2026-08 更换 v4**，与 config.c 默认 URL、docs/04 一致）：
+  - v4：`misakaio/chnroutes2` `master/chnroutes.txt`（每日 APNIC 路由 dump，聚合约 3900 条，
+    每行 CIDR、LF；**文件头 2 行是 `#` 注释**，脚本用 grep `^[0-9.]+/[0-9]+` 过滤后落盘——
+    cnip 解析器本身也支持 `#` 行，过滤只为输出文件纯净）。原 `17mon/china_ip_list`
+    （每季度更新、非聚合约 8.7k 条、CC-BY-NC-SA）已弃用。
+  - v6：gaoyifan `china6.txt`（ip-lists 分支，每日更新；**首行可能是注释**，
+    用 grep 过滤 `^[0-9a-fA-F:]+/[0-9]+` 后 `mv` 回原名）——保留。
+  - 大陆可达性：raw.githubusercontent.com 在大陆常不可达，文档化了 jsDelivr 镜像
+    （`cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>`，cdn 不可达换 fastly 前缀），
+    未设为默认（无法离线验证可达性）。
 - 输出到 `data/cnip/`（默认）；路径写进 split.yaml 的 `cnip.path_v4/v6`。
 - v1.0.6：curl 加 `-f`（HTTP 非 2xx 即失败）+ 下载后 `-s` 空文件检查，失败即退出，不再静默留空文件。
 - 坑：依赖 `curl`（安卓 Magisk 环境通常没有）——**v6 源重定向多，--max-time 120 是硬超时**，弱网会失败。cnip.c 的 `cnip_load_url` 同受此限。

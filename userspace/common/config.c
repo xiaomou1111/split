@@ -41,9 +41,10 @@ void config_defaults(struct split_config *cfg)
 
     cfg->cnip_auto_update_hours = 24;
 
-    /* CNIP 默认数据源（与 scripts/fetch-cnip.sh 一致） */
+    /* CNIP 默认数据源（与 scripts/fetch-cnip.sh 一致）。
+     * v4: misakaio/chnroutes2 每日 APNIC 聚合；v6: gaoyifan/china-operator-ip 每日。 */
     snprintf(cfg->cnip4_url, CFG_STRLEN, "%s",
-             "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt");
+             "https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt");
     snprintf(cfg->cnip6_url, CFG_STRLEN, "%s",
              "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt");
 }
