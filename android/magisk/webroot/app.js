@@ -4,12 +4,13 @@
  * 后端是运行期脚本 /data/adb/split/scripts/webuiapi.sh（root，经 ksu.exec 调用）。
  * 本文件只做展示与组装参数，不透传任意 shell。
  *
- * 特性（v1.2.x WebUI 完善）：
- *  - 状态页：运行状态卡补 TUN ifindex / splitd PID / 存活守护 / 运行时长；
- *    新增"环境信息"卡（内核/系统/SELinux/设备）；stats 增量速率 + 异常着色。
- *  - 参数页：get-config 解析的"当前生效配置摘要"卡。
- *  - 规则页：在线规则按 proxy/direct 计数展示。
- *  - 状态面板每 5s 轮询（仅激活时），含 env。
+ * 特性：
+ *  - 状态页：运行状态卡（eBPF 程序 / 挂载网卡 / TUN ifindex / CNIP 计数 / 路由接管 /
+ *    splitd PID / 存活守护 / 运行时长 + WARN 行）；mihomo 卡；环境信息卡；stats 增量
+ *    速率与异常着色；仅状态面板激活时每 5s 轮询（含 env）。
+ *  - 规则页：在线规则（map 实况）按 proxy/direct 计数展示与增删。
+ *  - 参数页：get-config 解析的"当前生效配置摘要"卡（含 CNIP url 下载 / 本地路径语义）。
+ *  - 日志页：splitd / mihomo 日志尾部查看（可选自动刷新）。
  */
 
 import { exec, toast } from './kernelsu.js';
@@ -360,8 +361,14 @@ function summarizeConfig(text) {
   rows.push(['skip_uid', uids.length ? uids.join(' ') : '—']);
   rows.push(['CNIP v4', pathBase(flat['cnip.path_v4']) || '未配置']);
   rows.push(['CNIP v6', pathBase(flat['cnip.path_v6']) || '未配置']);
-  const upd = flat['cnip.auto_update_hours'];
-  rows.push(['自动更新', upd ? `${upd} 小时` : '关闭']);
+  /* v1.4.2/1.4.3：url_v4/v6 是自动更新的下载源（逗号分隔多源 fallback）。cnip_auto_update
+   * 对无 url 的族是 no-op——hours>0 但无 url 时定时触发空转（不会下载也不重读本地，
+   * 本地重读只走 reload-cnip），摘要如实标注。 */
+  const url4 = flat['cnip.url_v4'], url6 = flat['cnip.url_v6'];
+  const upd = parseInt(flat['cnip.auto_update_hours'], 10) || 0;
+  rows.push(['CNIP 下载源', url4 && url6 ? 'v4+v6' : (url4 ? '仅 v4' : (url6 ? '仅 v6' : '未配置'))]);
+  rows.push(['自动更新', !upd ? '关闭'
+    : (url4 || url6) ? `${upd} 小时（下载）` : `${upd} 小时（无下载源）`]);
   if (flat['debug'] === 'true') rows.push(['调试模式', '开', 'v-warn']);
   return rows;
 }

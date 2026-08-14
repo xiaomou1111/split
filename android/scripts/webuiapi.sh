@@ -9,7 +9,8 @@
 #   stats                  → stats 文本
 #   list-rules             → 当前在线规则（proxy/direct 行，v1.2.2）
 #   version                → SPLIT_VERSION=...（打包时注入，仓库副本回退 dev）
-#   start                  → 后台派生 splitd 并回 status
+#   start                  → 后台派生 splitd 并回 status（splitd 日志写 $LOG_DIR/splitd.log，
+#                             见下方 export SPLIT_LOG——与 service.sh/watchdog 同源）
 #   stop                   → splitctl stop
 #   reload                 → splitctl reload
 #   reload-cnip            → splitctl reload-cnip（重读本地文件重灌）
@@ -44,6 +45,10 @@ MIHOMO_LOG="$LOG_DIR/mihomo.log"
 # 不值得反复执行。以缓存文件存在为有效（模块重装会重建 run/ 目录）。
 MIHOMO_VER_CACHE="$RUN_DIR/mihomo.version"
 export SPLIT_SOCKET="$RUN_DIR/splitd.sock"
+# splitctl start 派生 splitd 的 stdout/stderr 走 split_log_path()（$SPLIT_LOG 优先，
+# 默认 /var/log/splitd.log）。Android 上 service.sh / watchdog 都写 logs/splitd.log，
+# 这里一并指向同一文件，否则 WebUI『启动』起的 splitd 日志落在日志页读不到的地方。
+export SPLIT_LOG="$LOG_DIR/splitd.log"
 
 CTL="$BIN_DIR/splitctl"
 SPLITD="$BIN_DIR/splitd"

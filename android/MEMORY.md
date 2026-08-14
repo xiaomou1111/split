@@ -191,6 +191,10 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   redirect_err/dropped/miss_tun 非 0 红色；参数页新增 get-config 解析的"当前生效配置摘要"卡（parseMiniYaml，
   注意与 config.c 的极简 YAML 子集保持同理解，改配置语法两侧同步）；规则页按 proxy/direct 计数；守护进程
   开关动作执行后自动刷新状态面板，mihomo 卡提供"查看日志/开关"快捷跳转。
+- **配置摘要 CNIP url 语义（v1.4.2/1.4.3 跟进）**：摘要卡对 `cnip.url_v4/v6`（逗号分隔多源 fallback）只显示
+  "已配置 v4/v6/未配置"，`自动更新` 行按 `hours`+url 区分 `N 小时（下载）` / `N 小时（无下载源）` / `关闭`——
+  cnip_auto_update 对无 url 的族是 no-op（hours>0 也空转，本地重读只走 reload-cnip），摘要文本须与
+  daemon 行为一致，改一侧同步另一侧。
 - **版本显示（v1.2.2）**：顶栏 `#renderer` 显示 `v<版本>`，数据来自 `version` 动作——webuiapi.sh 内
   `SPLIT_VERSION` 由 **gen-magisk.sh 打包时注入**（唯一真源 split_bpf.h，替换 `@SPLIT_VERSION@` 占位符）；
   直接运行仓库副本时占位符未替换自动回退 `dev`。改版本号只需动 split_bpf.h，打包脚本同步，不另行同步 webuiapi.sh。
@@ -205,6 +209,10 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   `-d "$SPLITD"`（把路径当 `-d` 参数）会导致派生到默认 `/usr/local/bin/splitd`，Android 上
   启动必失败（execv 127）。webuiapi.sh 已改 `-s`。
 - **路径恒定**：INSTALL_DIR=/data/adb/split，`export SPLIT_SOCKET=$RUN_DIR/splitd.sock`（Android 无 /run）。
+- **SPLIT_LOG（2026-08 跟进）**：webuiapi.sh 与 SPLIT_SOCKET 并列全局 `export SPLIT_LOG=$LOG_DIR/splitd.log`。
+  `splitctl start` 派生 splitd 的 stdout/stderr 走 `split_log_path()`（$SPLIT_LOG 优先，默认
+  /var/log/splitd.log）；不设则 WebUI『启动』起的 splitd 日志落在日志页读不到的地方（/var/log
+  不可写时 splitctl 回退 /dev/null）。service.sh / watchdog 直接 `>> logs/splitd.log`，不受影响。
 - 打包：`gen-magisk.sh` 会把 `webroot/` 拷贝进 zip 根；`customize.sh` 现有逻辑把 scripts/*.sh 铺到运行目录。
 - 坑：app.js 里 `encodeToB64` 用 TextEncoder→base64，避免中文注释乱码；stats 解析用 `key value` 行。
 - customize.sh：BOOTMODE!=true 不 `abort`（KernelSU/APatch 可能不导出该变量），mkdir 失败才真失败。
