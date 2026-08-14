@@ -94,7 +94,18 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.2（当前）        CNIP 数据源多源 fallback（2026-08 源批次 + 双源兜底）：
+v1.4.3（当前）        CNIP 默认源换 mihomo 生态权威源 Loyalsoldier/geoip + 混合文件按族加载：
+                      ①**默认源换权威**：v4/v6 都指向 `Loyalsoldier/geoip` `release/text/cn.txt`
+                        （mihomo 生态默认 GeoIP，每日更新；实测 v4=4145 / v6=1235 条，纯 CIDR
+                        无注释，v6 与旧 gaoyifan 完全一致=零损失，v4 较 chnroutes2 的 3908 更全）。
+                        jsDelivr 优先（大陆可达）+ raw 兜底，双候选 fallback 不变
+                      ②**混合文件按族加载**：cn.txt 是 v4+v6 混合单文件，url_v4/v6 指向同一份，
+                        daemon 下载后 cnip_load_fd 用新增 cnip_line_family() 探测行地址族——
+                        **异族行跳过不计 bad、非法行仍计 bad**（此前异族行会全计"失败"，日志
+                        误导）；fetch-cnip.sh 改为单下载 + grep 按族拆分（拆出 v4=4145/v6=1235）
+                      ③配置/文档/MEMORY 全量同步；CFG_STRLEN 保持 256（新 URL 实测 139 字符）；
+                        版本号 1.4.3（bump-version.sh）
+v1.4.2        CNIP 数据源多源 fallback（2026-08 源批次 + 双源兜底）：
                       ①**CNIP v4 默认源更换**：17mon/china_ip_list（每季度更新、非聚合
                         ~8.7k 条、CC-BY-NC-SA 许可）→ misakaio/chnroutes2（每日 APNIC
                         路由 dump、聚合约 3900 条、省近半 map 内存）；v6 保留

@@ -41,15 +41,17 @@ void config_defaults(struct split_config *cfg)
 
     cfg->cnip_auto_update_hours = 24;
 
-    /* CNIP 默认数据源（与 scripts/fetch-cnip.sh 一致，v1.4.2 起多源 fallback）。
-     * 逗号分隔按序尝试：jsDelivr（大陆可达）优先，raw.githubusercontent 兜底。
-     * v4: misakaio/chnroutes2 每日 APNIC 聚合；v6: gaoyifan/china-operator-ip 每日。 */
+    /* CNIP 默认数据源（与 scripts/fetch-cnip.sh 一致；v1.4.2 起多源 fallback，
+     * v1.4.3 起为 mihomo 生态权威源 Loyalsoldier/geoip，cn.txt 每日更新）。
+     * cn.txt 是 v4+v6 混合文件（实测 v4=4145 / v6=1235 条，纯 CIDR 无注释行），
+     * 故 url_v4/v6 指向同一份，加载时按族过滤（见 cnip.c cnip_line_family）。
+     * 逗号分隔按序尝试：jsDelivr（大陆可达）优先，raw.githubusercontent 兜底。 */
     snprintf(cfg->cnip4_url, CFG_STRLEN, "%s",
-             "https://cdn.jsdelivr.net/gh/misakaio/chnroutes2@master/chnroutes.txt,"
-             "https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt");
+             "https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,"
+             "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt");
     snprintf(cfg->cnip6_url, CFG_STRLEN, "%s",
-             "https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt,"
-             "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt");
+             "https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,"
+             "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt");
 }
 
 /* 截掉行尾空白/换行（fgets 会带 \n，这里统一清理） */

@@ -73,7 +73,7 @@ enum split_stats_key {
 
 #ifndef __KERNEL__
 /* 仅 userspace 使用的宏（编译 bpf 时不可见） */
-#define SPLIT_VERSION "1.4.2"
+#define SPLIT_VERSION "1.4.3"
 #define SPLIT_PIN_NS "/sys/fs/bpf/split"
 #define SPLIT_SOCKET "/run/splitd.sock"
 #define SPLIT_LOG "/var/log/splitd.log"

@@ -12,6 +12,9 @@
 - 每行一条 `A.B.C.D/N` 或 `IPv6/N`；裸 IP 自动补 /32 或 /128；支持 `#` 注释与空行。
 - 行尾处理：`\n`/`\r`/尾随空白统一清除（cnip.c 逐字符 trim）——**CRLF 文件已兼容**，
   fetch-cnip 输出为 LF。
+- **v1.4.3 支持 v4+v6 混合文件按族加载**（如 Loyalsoldier cn.txt）：`cnip_load_fd` 前置
+  `cnip_line_family()`，异族行跳过、非法行计 bad；`map_cnip_add_cidr` 仍按 family 决定
+  落 v4/v6 map（见第 8 条）。
 
 ## 关键决策与坑
 1. **幂等=全量替换（v1.0.5 修复）**：`cnip_apply` 会先调 `loader.map_cnip_clear`（或别名 `map_cnip_clear_all`）清空 v4+v6 再灌。此前是"追加"语义（`BPF_ANY` update，重复 reload 不退旧段），上游列表收缩时旧前缀残留 → 误判直连。daemon 的 `reload-cnip` 与定时刷新都走此"先清空再全量"路径。
@@ -48,15 +51,26 @@
    单族配置时该族下载失败不 return -1：不重试、失败被静默吞掉、还误报未配置族失败）。
    全部**配置族**失败才 return -1（下次再试）；至少一族成功则落 map，失败族因 `cnip_apply`
    是"全量清空重灌"，会按本地旧文件重写（沿用旧数据），已对失败族显式 `LOG_WARNF` 点明。
-6. map 容量 65536：CNIP 全量约 3900 条 v4（chnroutes2 聚合，2026-08 起默认源）+ 约 1200 条
-   v6（gaoyifan），余量足。若未来换非聚合源或加全量 v6 需留意不超过 65536。
+6. map 容量 65536：CNIP 全量约 4145 条 v4 + 1235 条 v6（v1.4.3 起默认源 Loyalsoldier/geoip，
+   单 cn.txt 混合，实测数字），余量足。若未来换非聚合源或加全量 v6 需留意不超过 65536。
 7. **多源 fallback（v1.4.2）**：`cnip_load_url` 的 url 支持逗号分隔多个候选（默认
    "jsDelivr,raw.githubusercontent"），`cnip_try_url()` 逐个 fork+exec 尝试，任一成功即用；
    全部失败 return -1（调用方沿用本地旧文件）。下载器（tool/is_curl）在循环外探测一次，
    候选间不重复探测；单引号拒绝检查移至每候选。**配套 CFG_STRLEN 128→256（config.h）**：
    双 URL 逗号拼接实测 v4=143/v6=155 字符，128 会截断（WSL 用旧二进制 validate 可复现截断）；
    纯用户态配置缓冲，无 ABI/持久化影响。默认源顺序 = jsDelivr（大陆实测可达）优先 + raw
-   兜底，与 scripts/fetch-cnip.sh 的候选数组一致（别单边改）。
+   兜底，与 scripts/fetch-cnip.sh 的候选数组一致（别单边改）。v1.4.3 起默认源换为
+   Loyalsoldier/geoip（v4/v6 同源 cn.txt），见第 8 条。
+
+8. **权威源 + 混合文件按族加载（v1.4.3）**：默认数据源换为 **mihomo 生态权威源
+   `Loyalsoldier/geoip`**（每日更新；`url_v4/v6` 都指向同一份 cn.txt，实测 v4=4145 / v6=1235
+   条，v6 与旧 gaoyifan 完全一致——Loyalsoldier 本就聚合它，故 v6 覆盖零变化）。cn.txt 是
+   **v4+v6 混合**纯 CIDR 文件（LF、无注释行），daemon 自动更新把同一文件分别下载到 path_v4
+   与 path_v6，`cnip_load_fd` 用 `cnip_line_family()` 探测单行地址族：**异族行跳过不计 bad、
+   非法行仍计 bad**——否则混合文件按族加载会把另一族行全计"失败"（ok/bad 语义污染，日志误导）。
+   对外部 `fetch-cnip.sh` 的拆分输出（纯族文件）零影响（全行同族，无跳过）。历史源已弃用：
+   v4 misakaio/chnroutes2（每日 APNIC 聚合 3908 条）、v6 gaoyifan/china-operator-ip（1235 条）。
+   CFG_STRLEN 保持 256（新双候选 URL 实测 139 字符，v4/v6 同串）。
 
 ## 验证
 - fetch-cnip 下载后 daemon 启动/`reload-cnip`；统计 `direct_cn` 增长即为生效。

@@ -19,6 +19,30 @@
 
 #include "../common/log.h"
 
+/* 单行地址族探测：返回 AF_INET / AF_INET6，非法（或超长）返回 0。
+ * v1.4.3：混合 v4+v6 数据源（Loyalsoldier/geoip cn.txt）按目标族加载时，
+ * 用此在进入 map_cnip_add_cidr 前跳过另一族行——否则会因 inet_pton 族不符
+ * 被计入"失败"行数（其实不是失败，是另一族）。裸 IP 无斜杠也能探测（对应
+ * 自动补 /32 或 /128 的既有逻辑）。 */
+static int cnip_line_family(const char *line)
+{
+    char ip[256];
+    const char *slash = strchr(line, '/');
+    size_t n = slash ? (size_t)(slash - line) : strlen(line);
+    struct in_addr a4;
+    struct in6_addr a6;
+
+    if (n == 0 || n >= sizeof(ip))
+        return 0;
+    memcpy(ip, line, n);
+    ip[n] = '\0';
+    if (inet_pton(AF_INET, ip, &a4) == 1)
+        return AF_INET;
+    if (inet_pton(AF_INET6, ip, &a6) == 1)
+        return AF_INET6;
+    return 0;
+}
+
 static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
                         unsigned int *p_ok, unsigned int *p_bad)
 {
@@ -41,6 +65,18 @@ static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
             p++;
         if (*p == '\0' || *p == '#')
             continue;
+
+        /* v1.4.3（混合源按族加载）：异族行跳过、不计 bad（Loyalsoldier cn.txt 同时含
+         * v4+v6，加载 v4 map 时跳过 v6 行）；非法行仍计 bad（ok/bad 语义不变）。 */
+        {
+            int lfam = cnip_line_family(p);
+            if (lfam == 0) {
+                bad++;
+                continue;
+            }
+            if (lfam != family)
+                continue;
+        }
 
         slash = strchr(p, '/');
         {

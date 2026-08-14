@@ -55,7 +55,8 @@ cnip:
   # url 留空 = 只按间隔重读本地文件（不会联网）。0=关闭自动更新。
   # 多源 fallback（v1.4.2）：url 支持逗号分隔多个候选，按序尝试、任一成功即用。
   #   jsDelivr 大陆可达优先，raw.githubusercontent 全球更稳兜底。
-  # v4 源 misakaio/chnroutes2（每日 APNIC 聚合）；v6 源 gaoyifan/china-operator-ip（每日）。
-  url_v4: https://cdn.jsdelivr.net/gh/misakaio/chnroutes2@master/chnroutes.txt,https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt
-  url_v6: https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt,https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt
+  # 权威源（v1.4.3）：mihomo 生态默认 GeoIP 源 Loyalsoldier/geoip，cn.txt 每日更新。
+  #   cn.txt 是 v4+v6 混合文件（实测 v4=4145 / v6=1235 条），v4/v6 指向同一份，加载时按族过滤。
+  url_v4: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt
+  url_v6: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt
   auto_update_hours: 24   # 1 天

@@ -74,8 +74,8 @@ rules:
 cnip:
   path_v4: /data/adb/split/config/cn_cidr_v4.txt   # 本地文件，每行 A.B.C.D/N
   path_v6: /data/adb/split/config/cn_cidr_v6.txt
-  url_v4: https://cdn.jsdelivr.net/gh/misakaio/chnroutes2@master/chnroutes.txt,https://raw.githubusercontent.com/misakaio/chnroutes2/master/chnroutes.txt
-  url_v6: https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt,https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china6.txt
+  url_v4: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt
+  url_v6: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt
   auto_update_hours: 24       # 0=不自动更新；默认 24(每天)
 ```
 
@@ -87,9 +87,11 @@ cnip:
 > 没有 curl，有 busybox 即可，见 cni/MEMORY）。下载失败 / HTTP 错误 / 内容 0 条时**沿用本地
 > 旧文件**，不覆盖不重灌（不会把 CNIP 清空归零）。
 > **多源 fallback（v1.4.2）**：`url_v4/v6` 支持**逗号分隔多个候选**，按序尝试、任一成功即用。
-> 默认源（2026-08 更换 v4）：v4 `misakaio/chnroutes2`（每日 APNIC 聚合，约 3900 条）、
-> v6 `gaoyifan/china-operator-ip`（每日）。**jsDelivr**（`https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>`）
-> 大陆可达优先，raw.githubusercontent.com 全球更稳兜底（本网络实测 raw 被屏蔽、jsDelivr 可达）。
+> 默认源（v1.4.3 起）：**mihomo 生态权威源 `Loyalsoldier/geoip`**（每日更新；实测 v4=4145 条、
+> v6=1235 条）。cn.txt 为 **v4+v6 混合**纯 CIDR 文件，`url_v4/v6` 指向同一份：daemon 自动更新
+> 下载后按族加载（另一族行自动跳过，见 cni/MEMORY）；外部脚本 `fetch-cnip.sh` 则先拆分再落盘。
+> **jsDelivr**（`https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>`）大陆可达优先，
+> raw.githubusercontent.com 全球更稳兜底（本网络实测 raw 被屏蔽、jsDelivr 可达）。
 > URL 内如需字面逗号请用 `%2C`；候选之间可用空格分隔以增强可读性。无任何下载器时留空 url、只按间隔重读本地
 > 文件，或外部脚本跑 `fetch-cnip.sh` + `splitctl reload-cnip`；`splitctl update-cnip`
 > （v1.4.1 手动更新）与自动更新同路径。

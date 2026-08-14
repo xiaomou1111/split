@@ -27,20 +27,20 @@
   修复"只加载不清理"的坑；注意会一并删掉该网卡原有 clsact。
 
 ## fetch-cnip.sh
-- 默认源（**2026-08 更换 v4；v1.4.2 多源 fallback**，与 config.c 默认 URL、docs/04 一致）：
-  - v4：`misakaio/chnroutes2` `master/chnroutes.txt`（每日 APNIC 路由 dump，聚合约 3900 条，
-    每行 CIDR、LF；**文件头 2 行是 `#` 注释**，脚本用 grep `^[0-9.]+/[0-9]+` 过滤后落盘——
-    cnip 解析器本身也支持 `#` 行，过滤只为输出文件纯净）。原 `17mon/china_ip_list`
-    （每季度更新、非聚合约 8.7k 条、CC-BY-NC-SA）已弃用。
-  - v6：gaoyifan `china6.txt`（ip-lists 分支，每日更新；**首行可能是注释**，
-    用 grep 过滤 `^[0-9a-fA-F:]+/[0-9]+` 后 `mv` 回原名）——保留。
-  - **多源 fallback（v1.4.2）**：`dl_candidates()` 按序尝试每族候选数组（jsDelivr 大陆可达
+- 默认源（**v1.4.3 起为 mihomo 生态权威源 Loyalsoldier/geoip**，与 config.c 默认 URL、docs/04 一致）：
+  - 单一 `cn.txt`（`release` 分支 `text/cn.txt`，每日更新）：**v4+v6 混合**纯 CIDR 文件，
+    LF、无注释行（实测 v4=4145 / v6=1235 条，0 非法行）。下载后按族 grep 拆分为
+    `cn_cidr_v4.txt`（`^[0-9.]+/[0-9]+$`）/ `cn_cidr_v6.txt`（`^[0-9a-fA-F:]+/[0-9]+$`），
+    再删中间文件——daemon 自动更新路径则直接落同一混合文件、按族加载（见 cni/MEMORY 第 8 条）。
+    历史源已弃用：v4 `misakaio/chnroutes2`（每日 APNIC 聚合 3908 条）、v6 `gaoyifan`
+    （1235 条）、更早 `17mon/china_ip_list`（季度、非聚合 ~8.7k 条、CC-BY-NC-SA）。
+  - **多源 fallback（v1.4.2）**：`dl_candidates()` 按序尝试候选数组（jsDelivr 大陆可达
     优先 → raw.githubusercontent 兜底），任一成功（非空）即用；与 config.c 默认逗号串一致。
     WSL 实测（2026-08）：本网络 raw.githubusercontent.com 被屏蔽（HTTP=000），jsDelivr 可达
-    （v4=3908 行 / v6=1235 行，0 非法行），故 jsDelivr 作第一候选。
+    （cn.txt v4=4145 / v6=1235 行，0 非法行），故 jsDelivr 作第一候选。
 - 输出到 `data/cnip/`（默认）；路径写进 split.yaml 的 `cnip.path_v4/v6`。
 - v1.0.6：curl 加 `-f`（HTTP 非 2xx 即失败）+ 下载后 `-s` 空文件检查，失败即退出，不再静默留空文件。
-- 坑：依赖 `curl`（安卓 Magisk 环境通常没有）——**v6 源重定向多，--max-time 120 是硬超时**，弱网会失败。cnip.c 的 `cnip_load_url` 同受此限。
+- 坑：依赖 `curl`（安卓 Magisk 环境通常没有）；`--max-time 120` 是硬超时，弱网会失败。cnip.c 的 `cnip_load_url` 同受此限。
 
 ## gen-magisk.sh
 - 打包：二进制 + BPF + config + android/magisk 骨架 + android/scripts/*.sh → `build/split-magisk-v{VERSION}.zip`。
