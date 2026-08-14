@@ -20,6 +20,11 @@
   实现**必须用 prev-key 顺序迭代**（先取首键，再 `get_next_key(prev,next)` 循环）——与 `map_clear_by_keys` 的
   "反复取首键"相反：那是删除场景（删键后 get_next_key(prev) 提前 -ENOENT），计数不删键，若复用"反复取首键"
   会永远返回同一首键 → 死循环。
+  **v1.4.6（审查 P2）**：daemon `status` 不再每次同步全量遍历（WebUI 5s 轮询会阻塞主循环）——
+  改由 daemon 缓存计数、仅启动/重灌/自动更新完成时失效重算（见 daemon/MEMORY.md）；`map_cnip_count`
+  仍是缓存失效时的重算源。新增 **`map_cnip_cidr_ok(cidr, family)`**（dry-run，不写 map）——
+  与 `map_cnip_add_cidr` 判定口径一致（parse_pfix 0..128 + inet_pton，超范围 clamp 计合法），
+  供 cni 下载校验阶段计 ok/bad，避免校验期写 map 造成 map≠file（见 cni/MEMORY.md）。
 - `map_rule_clear / map_cnip_clear`：reload 前清空对应 map（get_next_key+delete 迭代，HASH/LPM_TRIE 通用），保证"先清空再写"幂等。
 - **`map_rule_foreach(ctx, which, cb, priv)`（v1.2.2 新增）**：枚举某 which（0=proxy/1=direct）的 v4+v6 两个规则
   map，把每条 LPM key 还原成 CIDR 文本回调 `cb(which, cidr, priv)`（daemon `list-rules` / WebUI 规则列表用）。

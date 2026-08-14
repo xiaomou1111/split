@@ -673,6 +673,40 @@ int map_cnip_add_cidr(struct split_bpf_ctx *ctx, const char *cidr, int family)
     return bpf_map__update_elem(m, &k6, sizeof(k6), &one, sizeof(one), BPF_ANY);
 }
 
+/* v1.4.6（审查 P2）：dry-run 校验——判定 cidr 能否被 map_cnip_add_cidr 接受，但不写
+ * map。与 map_cnip_add_cidr 的 ok/bad 口径严格一致（parse_pfix 0..128 + inet_pton，
+ * 超范围前缀 clamp 计合法），仅略去 bpf_map__update_elem（CNIP map 65536 容量实际
+ * 不会满，update 失败不改变校验结论）。 */
+int map_cnip_cidr_ok(const char *cidr, int family)
+{
+    char buf[200], *slash;
+    uint32_t pfix;
+    struct in_addr a4;
+    struct in6_addr a6;
+
+    if (snprintf(buf, sizeof(buf), "%s", cidr) >= (int)sizeof(buf))
+        return -1;
+    slash = strchr(buf, '/');
+    if (slash)
+        *slash++ = '\0';
+    {
+        int p = parse_pfix(slash, family == AF_INET ? 32 : 128);
+
+        if (p < 0)
+            return -1;
+        pfix = (uint32_t)p;
+    }
+    if (family == AF_INET) {
+        if (inet_pton(AF_INET, buf, &a4) != 1)
+            return -1;
+    } else {
+        if (inet_pton(AF_INET6, buf, &a6) != 1)
+            return -1;
+    }
+    (void)pfix; /* clamp 不影响 ok/bad 判定，与 map_cnip_add_cidr 一致 */
+    return 0;
+}
+
 int map_stats_dump(struct split_bpf_ctx *ctx, uint64_t out[STAT_MAX])
 {
     uint32_t k;

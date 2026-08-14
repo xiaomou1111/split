@@ -77,6 +77,11 @@
   多余重启（断连）。现从 config.yaml 简单 sed 提取 secret（去引号/行内注释），非空则带鉴权头，
   读不到/为空按旧逻辑不带。提取失败只会 401 → 自然落 `restart_mihomo`（该函数即原重启块，
   已抽出复用，两路径共用）；`curl` 缺失同样落重启兜底。重启块改动唯一定点 = `restart_mihomo()`。
+  **v1.4.6（审查 P2）：curl 必须带 `-f`**——此前两处 `curl -s -m 3 -X PATCH` 无 `--fail`，
+  401/4xx 是"HTTP 成功"（curl 退出 0），`|| restart_mihomo` 不触发，冷却 300s 后重试同一
+  失败 PATCH，TUN 自愈永久卡死（与上面"401 → 自然落重启"自述矛盾）。加 `-f` 后非 2xx 走重启兜底。
+  注意：此改动让"API 可达但 PATCH 因鉴权/参数被拒"也从原来的静默跳过改为重启 mihomo——符合
+  自愈兜底语义，但 401 不再有"多余重启"顾虑（Bearer 正确时本就不会 401）。
   **配套（同一批次）**：配置模板 `configs/mihomo/mihomo-package.yaml` 的 `external-controller`
   由 `0.0.0.0:9090` 改绑 `127.0.0.1:9090`——封掉"9090 无 secret + allow-lan"这个 LAN 操控面
   （旧故障模式见上）；全库对 9090 的调用方本就只走 127.0.0.1（watchdog / 状态栏磁贴），无破坏。

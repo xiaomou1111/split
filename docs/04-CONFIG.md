@@ -35,9 +35,12 @@ ifaces:
 
 ```yaml
 default:
-  verdict: "tun"            # "tun" | "direct"；安全起见选 tun(海外默认代理)
+  verdict: tun              # tun | direct（裸词，勿加引号）；安全起见选 tun(海外默认代理)
   ipv6: true                # 是否参与 v6 分类（false 则 v6 一律直连）
 ```
+> 注意：`verdict` 取值是**裸词**（`tun`/`direct`），解析器不剥引号——写 `"direct"`（带引号）
+> 会因白名单不匹配被 WARN 并回落默认 `tun`（想直连实际走代理）。写 `"tun"` 则每次加载
+> 多一条 WARN。配置文件一律不加引号（v1.4.6 文档纠偏）。
 
 ## 4. rules(强制规则段——优先级高于 CNIP)
 
@@ -92,9 +95,10 @@ cnip:
 > 下载后按族加载（另一族行自动跳过，见 cni/MEMORY）；外部脚本 `fetch-cnip.sh` 则先拆分再落盘。
 > **jsDelivr**（`https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>`）大陆可达优先，
 > raw.githubusercontent.com 全球更稳兜底（本网络实测 raw 被屏蔽、jsDelivr 可达）。
-> URL 内如需字面逗号请用 `%2C`；候选之间可用空格分隔以增强可读性。无任何下载器时留空 url、只按间隔重读本地
-> 文件，或外部脚本跑 `fetch-cnip.sh` + `splitctl reload-cnip`；`splitctl update-cnip`
-> （v1.4.1 手动更新）与自动更新同路径。
+> URL 内如需字面逗号请用 `%2C`；候选之间可用空格分隔以增强可读性。**url 留空 = 自动更新
+> 对该族空转**（不下载也不重读本地，见 cnip.c `cnip_auto_update` 的 no-op 判定；v1.4.6 文档纠偏）：
+> 本地文件更新后需外部脚本跑 `fetch-cnip.sh` + `splitctl reload-cnip` 重灌，或重启 daemon；
+> `splitctl update-cnip`（v1.4.1 手动更新）与自动更新同路径（同样要求 url 与 path 都配才动作）。
 > Android 可直接复用 box 的 `cn.zone`/`cn_ipv6.zone` 改名后用（每行 CIDR，格式兼容）。
 
 ## 6. 内置直连段（policy 硬编码，无需配置）

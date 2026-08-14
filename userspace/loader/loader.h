@@ -62,6 +62,11 @@ int map_skip_uid_del(struct split_bpf_ctx *ctx, uint32_t uid);
 /* cidr: "A.B.C.D/N" 或 "xxxx:xxxx::/N"，写入 rule map（which=RULE_PROXY/DIRECT） */
 int map_rule_add_cidr(struct split_bpf_ctx *ctx, const char *cidr, int which);
 int map_cnip_add_cidr(struct split_bpf_ctx *ctx, const char *cidr, int family);
+/* v1.4.6（审查 P2）：校验 CIDR 能否写入 CNIP map（dry-run，不写 map）。
+ * 与 map_cnip_add_cidr 判定口径一致（parse_pfix 0..128 + inet_pton，超范围 clamp
+ * 计合法），供下载校验阶段计 ok/bad——校验期若直接写 map，rename 失败（磁盘满/权限）
+ * 且全配置族失败跳过 cnip_apply 时，map 会残留本地旧文件里没有的条目（map≠file）。 */
+int map_cnip_cidr_ok(const char *cidr, int family);
 /* 读取统计（per-cpu 求和） */
 int map_stats_dump(struct split_bpf_ctx *ctx, uint64_t out[STAT_MAX]);
 

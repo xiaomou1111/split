@@ -65,6 +65,11 @@
   失败）——此前 `ctl_status` 在 ctl 路径同步重跑 `route_tun_hijacked`（2~4 次 netlink dump、
   最坏 4×2s），阻塞主循环的 ctl/网络事件/CNIP 调度。现 status 至多 30s（P2：10s→30s）
   陈旧，不再阻塞。
+  **v1.4.6（审查 P2）**：`cnip4/cnip6` 计数同样改缓存（`g_cnip_n4/n6`）——此前每次 status
+  同步 `map_cnip_count` 全量遍历 CNIP map（实况约 5k 次 get_next_key，WebUI 5s 轮询阻塞
+  主循环，与 v1.2.8 hijack 阻塞同类）。计数只在**启动播种 + CNIP 子进程回收时失效重算**
+  （CNIP map 只被 cnip_apply 改写），轮询期 O(1)；顺带消除父进程 status 与正在灌入的 fork
+  子进程并发读 map 的部分计数。改 CNIP map 写入方时必须同步失效点。
 - **`list-rules`（v1.2.2 新增，WebUI 规则列表）**：枚举 proxy/direct 四个规则 map（LPM_TRIE），逐行回 `proxy <cidr>` / `direct <cidr>`（v4 在前、v6 在后）；先 `OK` 后数据行再 `END`，无规则则只有 OK/END 两行。实现走 loader 的 `map_rule_foreach`（prev-key 顺序迭代，不删键）。**展示的是 map 实况**（配置基线 + 运行时 add-rule/del-rule 的结果），改输出格式必须同步 app.js 的 loadRules。
 - **`reload`（v1.0.6 起）是"重读配置文件再全量应用"**：`config_load(cfg_path)` 成功后把结果写回
   daemon 的活配置（`cnip_next_ms` 只提前不推后地按新 `cnip_auto_update_hours` 校准——F3，防覆盖

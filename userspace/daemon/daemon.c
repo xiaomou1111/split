@@ -125,6 +125,18 @@ static int g_tun_last_good = 0;
  * 恢复对新漂移的重新搜寻。 */
 static int g_tun_drift_idx = 0;
 
+/* v1.4.6（审查 P2）：status 的 CNIP 计数缓存——ctl_status 每次同步全量遍历 CNIP map
+ * （v4/v6 实况约 5k 次 get_next_key，WebUI 每 5s 轮询会阻塞主循环，与 v1.2.8 已修的
+ * hijack 阻塞同类）。CNIP map 只被 cnip_apply 改写（启动/重灌/自动更新），故计数
+ * 在 apply 完成时失效重算即可，轮询期恒 O(1)。 */
+static uint32_t g_cnip_n4 = 0, g_cnip_n6 = 0;
+static int g_cnip_cnt_valid = 0;
+
+static void cnip_cnt_invalidate(void)
+{
+    g_cnip_cnt_valid = 0;
+}
+
 static void on_signal(int sig)
 {
     (void)sig;
@@ -238,7 +250,18 @@ static void ctl_status(int c, struct split_bpf_ctx *ctx)
 
     if (map_get_tun(ctx, &tun_u) == 0)
         tun = (int)tun_u;
-    map_cnip_count(ctx, &n4, &n6);
+    /* v1.4.6（审查 P2）：读 CNIP 计数缓存而非同步遍历 map——只有 cnip_apply 完成
+     * （启动/重灌/自动更新，见 cnip_cnt_invalidate 调用点）才失效重算，轮询期 O(1)。
+     * 顺带消除"父进程 status 与正在灌入的 fork 子进程并发读 map"的部分计数问题。 */
+    if (!g_cnip_cnt_valid) {
+        map_cnip_count(ctx, &n4, &n6);
+        g_cnip_n4 = n4;
+        g_cnip_n6 = n6;
+        g_cnip_cnt_valid = 1;
+    } else {
+        n4 = g_cnip_n4;
+        n6 = g_cnip_n6;
+    }
     /* v1.2.8：读主循环 HIJACK_CHECK_MS 节流缓存的路由接管检测结果，不在 ctl 路径同步重跑
      * netlink dump（最多 4×2s 阻塞）。hijack_now 含 -1=检测失败（如实显示）。 */
     hijack = g_hijack_now;
@@ -917,6 +940,10 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
         uint32_t n4 = 0, n6 = 0;
 
         map_cnip_count(&ctx, &n4, &n6);
+        /* 播种 status 计数缓存：启动时已执行 cnip_apply（本函数上方），此时计一次即可 */
+        g_cnip_n4 = n4;
+        g_cnip_n6 = n6;
+        g_cnip_cnt_valid = 1;
         if (n4 == 0 && n6 == 0) {
             /* v1.3.1（审查修复）：仅当"某族配了 url 且该族配了本地 path"时才补拉——
              * cnip_auto_update 的 cnip_fetch_to_path 对空 path 直接返回 0（no-op），
@@ -1024,6 +1051,7 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 pid_t done = cnip_pid; /* 回收后才清 0，先留一份用于日志 */
                 cnip_pid = 0;
                 g_cnip_busy = 0; /* 子进程已回收：解除 reload-cnip 拒绝 */
+                cnip_cnt_invalidate(); /* CNIP 可能已变（含校验副作用），计数缓存失效重算 */
                 if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
                     cnip_boot_once = 0;
                     cnip_next_ms = now_ms() +
@@ -1051,6 +1079,7 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                           strerror(errno));
                 cnip_pid = 0;
                 g_cnip_busy = 0;
+                cnip_cnt_invalidate(); /* ECHILD=子进程已被系统回收但确实跑过：CNIP 可能已变 */
                 cnip_next_ms = now_ms() + 60000LL;
             }
         }

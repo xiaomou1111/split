@@ -94,7 +94,18 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.5（当前）        DEBUG 日志补全（纯增量，无行为/契约变更；debug:true 下可见更多过程细节）：
+v1.4.6（当前）        2026-08-15 全库再审查 P2 修复批（7 项，详见当次提交）：
+                      ①splitctl send_cmd 映射 ERR 退出码——daemon 回 ERR 时 $? 非 0，
+                        webuiapi/app.js 不再把操作失败当成功（规则增删/update-cnip 误报）
+                      ②config.c is_section 补 '\r'——Windows/CRLF 写的 split.yaml 节头不再整节失效
+                      ③split-watchdog.sh curl PATCH 加 -f——API 401/4xx 落 restart_mihomo 兜底，
+                        TUN 自愈不再永久卡死
+                      ④daemon status 的 CNIP 计数缓存化（启动/重灌/自动更新后失效重算，
+                        轮询期 O(1)，消除每 5s 全量遍历阻塞主循环）
+                      ⑤cnip 下载校验改 dry-run——rename 失败时不再出现 map≠file 残留
+                      ⑥docs/04 verdict 示例去引号（解析器不剥引号，带引号会 WARN 回落）
+                      ⑦"url 留空=周期重读本地"虚假声明纠偏（实为自动更新对该族空转）
+v1.4.5        DEBUG 日志补全（纯增量，无行为/契约变更；debug:true 下可见更多过程细节）：
                       ①loader：map 打开成功/失败明细、加载成功附带 split/libbpf 版本
                       ②cnip：下载器识别（curl/wget）、每源下载耗时、混合文件按族加载跳过行数
                       ③rule：reload 后按族规则计数（uid/proxy4/proxy6/direct4/direct6）、

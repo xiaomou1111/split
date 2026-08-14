@@ -22,6 +22,10 @@
 2. `send_cmd`：写命令后 `read` 到 EOF 才返回——**依赖 daemon 的单命令即断协议**（daemon.c:132）。若 daemon 改为长连接，这里会阻塞到超时。
    **v1.2.8（审查修复）：读回复加 10s poll 超时**——此前 `read` 无限阻塞，daemon 若卡在长
    `ctl_serve`（netlink 扫描异常拖满超时）splitctl 会永久挂死。正常回复远小于 10s。
+   **v1.4.6（审查 P2）：ERR 映射非零退出码**——`send_cmd` 检查回复首行前缀，`ERR` → 返回 1
+   （正文仍打到 stdout）。此前 daemon 回 `ERR`（规则非法/非 root/未配源）时退出码恒 0，
+   `webuiapi.sh run()` 与脚本 `$?` 把失败当成功。依赖 daemon"回复首行 OK/ERR"契约，
+   改 daemon 回复格式时必须同步这里。
    **v1.1.4：发送必须带 `'\n'` 终止符**——daemon 命令读取已改为"换行终止循环读"（SOCK_STREAM 不保消息边界），
    不带 '\n' 会让 daemon 等满 5s 超时回 `ERR 命令超时`，命令全部失效。命令长度上限因此为 510 字节（`"cmd\n"` ≤ 511）。
 3. `cmd_start`：`fork` + `execv`，**不 setsid/不 daemonize**（子进程继承终端，close stdin 到 /dev/null）。

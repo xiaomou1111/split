@@ -49,6 +49,9 @@
   （症状：splitd.log 每个合法 section 都 `config_load:227 未知顶层配置 key`；config_dump 显示
   `cnip4=(未配置)`。可能 v1.1.5 收紧 is_section 判据时漏了 `\n`。）**修复：`p[n+1]` 增加
   `=='\n'` 分支。** `section_inline_warn` 本就排除 `\n`，无连带误报。
+  **坑 10 续（v1.4.6 审查 P2）**：补 `'\r'`——`str_trim_tail` 只清 value 不清节头行，Windows
+  编辑器（CRLF）写的 split.yaml 节头 `p[n+1]=='\r'` 同样不被识别，四个 section 整段失效。
+  仓库 shipped 配置为 LF，本机未实测 CRLF；修复与坑 10 同源同形，无连带。
 - `config_dump` 是 debug 用，输出格式被 cli `validate` 复用——改格式同步 cli。
 - 坑 12（v1.4.1 功能冲突审查）：**跨字段静默失效告警**——两处配置叠加时旧实现静默吞掉
   一方，现解析结束补 WARN：

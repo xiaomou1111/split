@@ -118,6 +118,10 @@ static int send_cmd(const char *cmd)
     /* v1.2.8（审查修复）：读回复加整体超时（10s）——此前 read 阻塞到 EOF，
      * daemon 若卡在长 ctl_serve（如 netlink 扫描异常拖满超时）splitctl 会无限
      * 挂死。daemon 单命令即断协议，正常回复远小于 10s。 */
+    /* v1.4.6（审查 P2）：回复首行契约 OK/ERR——ERR 必须映射非零退出码，否则
+     * webuiapi.sh run() 与脚本 $? 判断会把操作失败当成功（规则增删/update-cnip
+     * 误报）。ERR 正文仍照常打到 stdout（含错误信息），只影响退出码。 */
+    int ret = 0, first = 1;
     for (;;) {
         struct pollfd p = { .fd = fd, .events = POLLIN };
         int pr = poll(&p, 1, 10000);
@@ -131,6 +135,14 @@ static int send_cmd(const char *cmd)
         if (n > 0) {
             buf[n] = '\0';
             fputs(buf, stdout);
+            if (first) {
+                const char *s = buf;
+                first = 0;
+                while (*s == ' ' || *s == '\t')
+                    s++;
+                if (strncmp(s, "ERR", 3) == 0)
+                    ret = 1;
+            }
             continue;
         }
         if (n < 0) {
@@ -141,7 +153,7 @@ static int send_cmd(const char *cmd)
         break; /* EOF：daemon 已回复完毕并关闭连接 */
     }
     close(fd);
-    return 0;
+    return ret;
 }
 
 static int cmd_start(const char *cfg, const char *splitd, const char *bpf_obj,

@@ -44,8 +44,12 @@ static int cnip_line_family(const char *line)
     return 0;
 }
 
+/* dry_run=1：只解析计 ok/bad、不写 CNIP map（下载校验阶段用，见 cnip_try_url）——
+ * 校验期若直接写 map，rename 失败且全配置族失败跳过 cnip_apply 时，map 会残留
+ * 本地旧文件里没有的条目（map≠file）。dry_run 走 map_cnip_cidr_ok 判定，与
+ * 真正加载（map_cnip_add_cidr）的 ok/bad 口径一致。 */
 static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
-                        unsigned int *p_ok, unsigned int *p_bad)
+                        unsigned int *p_ok, unsigned int *p_bad, int dry_run)
 {
     char line[256];
     unsigned int ok = 0, bad = 0, skip = 0;
@@ -100,7 +104,8 @@ static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
             }
         }
 
-        if (map_cnip_add_cidr(ctx, one, family) == 0)
+        if ((dry_run ? map_cnip_cidr_ok(one, family)
+                     : map_cnip_add_cidr(ctx, one, family)) == 0)
             ok++;
         else
             bad++;
@@ -122,7 +127,7 @@ static int cnip_from_path(struct split_bpf_ctx *ctx, const char *path, int famil
         LOG_ERRORF("打开 %s 失败", path);
         return -1;
     }
-    cnip_load_fd(ctx, fp, family, &ok, &bad);
+    cnip_load_fd(ctx, fp, family, &ok, &bad, 0); /* 真正加载：写 map */
     fclose(fp);
     LOG_INFOF("CNIP(%s) 导入完成: %u 条, 失败 %u 条 (%s)",
               family == AF_INET ? "v4" : "v6", ok, bad, path);
@@ -269,7 +274,10 @@ static int cnip_try_url(struct split_bpf_ctx *ctx, const char *url,
     /* 解析下载内容并校验非空：0 条有效 CIDR = 拿到错误页/空文件（如镜像返回 200 的
      * HTML），直接弃用并 return -1，避免 cnip_fetch_to_path 把坏文件 rename 覆盖好
      * 文件。若此处放行，坏文件会经 cnip_apply 全量清空重灌 → CNIP 归零。真正的 map
-     * 灌入仍由 cnip_apply 完成（fetch 成功 rename 到正式 path 后统一重灌）。 */
+     * 灌入仍由 cnip_apply 完成（fetch 成功 rename 到正式 path 后统一重灌）。
+     * v1.4.6（审查 P2）：此校验为 dry-run（cnip_load_fd dry_run=1，不写 map）——
+     * 校验期写 map 会在 rename 失败（磁盘满/权限）且全配置族失败跳过 apply 时，
+     * 让 map 残留只存在于新下载文件、本地旧文件里没有的条目（map≠file）。 */
     {
         FILE *fp = fopen(tmp_path, "r");
         unsigned int ok = 0, bad = 0;
@@ -278,7 +286,7 @@ static int cnip_try_url(struct split_bpf_ctx *ctx, const char *url,
             LOG_ERRORF("打开下载文件失败: %s (%s)", tmp_path, strerror(errno));
             return -1;
         }
-        cnip_load_fd(ctx, fp, family, &ok, &bad);
+        cnip_load_fd(ctx, fp, family, &ok, &bad, 1); /* 校验：dry-run 不写 map */
         fclose(fp);
         LOG_INFOF("CNIP(%s) 下载并解析: %u 条, 失败 %u 条 (%s)",
                   family == AF_INET ? "v4" : "v6", ok, bad, url);

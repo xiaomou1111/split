@@ -132,15 +132,18 @@ static void list_key_inline_warn(const char *key, const char *v)
  * 此前依赖 `strcmp(p,N':')==0 || strncmp(p,N':',len)==0` 两条分支，虽已能
  * 挡住象 "rules_extra:"（冒号未紧贴节名）这类假节头，但对"冒号后直接跟
  * 内容（如 `rules:camel`，无空格）"会当作节头吞掉整行。此处要求冒号后必须
- * 是空白或行尾，杜绝该脚枪，也让节头判据单一、易读。 */
+ * 是空白或行尾，杜绝该脚枪，也让节头判据单一、易读。
+ * v1.4.6（审查 P2）：补 '\r'——str_trim_tail 只清 value 不清节头行，Windows
+ * 编辑器（CRLF）写的 split.yaml 的 `ifaces:`/`default:`/`rules:`/`cnip:` 会被
+ * 整节漏识别（节内 key 变"未知顶层 key" WARN，规则/CNIP 静默失效）。 */
 static int is_section(const char *p, const char *name)
 {
     size_t n = strlen(name);
 
     if (strncmp(p, name, n) != 0 || p[n] != ':')
         return 0;
-    return p[n + 1] == '\0' || p[n + 1] == '\n' || p[n + 1] == ' ' ||
-           p[n + 1] == '\t';
+    return p[n + 1] == '\0' || p[n + 1] == '\n' || p[n + 1] == '\r' ||
+           p[n + 1] == ' ' || p[n + 1] == '\t';
 }
 
 static void add_str(char list[][CFG_STRLEN], int *n, const char *v)

@@ -95,14 +95,17 @@ while :; do
           # 鉴权，否则 401 被误判为"API 不可达"而多余重启（断连）；读不到/为空 → 按旧逻辑
           # 不带鉴权。读取只做简单 sed 清洗（去引号/行内注释），secret 含特殊字符时提取
           # 失败只会 401 → 自然落到 restart_mihomo 兜底，不会误动作。
+          # v1.4.6（审查 P2）：curl 必须带 -f——此前 401/4xx 是"HTTP 成功"（curl 退出 0），
+          # `|| restart_mihomo` 不触发，冷却 300s 后重试同一失败 PATCH，TUN 自愈永久卡死
+          # 且与上述"401 → 落重启兜底"注释矛盾。加 -f 后任何非 2xx 都走重启兜底。
           _sec="$(sed -n 's/^[[:space:]]*secret:[[:space:]]*\(.*\)/\1/p' "$INSTALL_DIR/mihomo/config.yaml" 2>/dev/null | head -n1)"
           _sec="$(printf '%s' "$_sec" | sed -e 's/^[[:space:]]*//;s/["'\'']//g;s/[[:space:]]*#.*$//;s/[[:space:]]*$//')"
           if [ -n "$_sec" ]; then
-            curl -s -m 3 -X PATCH http://127.0.0.1:9090/configs \
+            curl -s -f -m 3 -X PATCH http://127.0.0.1:9090/configs \
                  -H "Authorization: Bearer $_sec" \
                  -d '{"tun":{"enable":true}}' >/dev/null 2>&1 || restart_mihomo
           else
-            curl -s -m 3 -X PATCH http://127.0.0.1:9090/configs \
+            curl -s -f -m 3 -X PATCH http://127.0.0.1:9090/configs \
                  -d '{"tun":{"enable":true}}' >/dev/null 2>&1 || restart_mihomo
           fi
           # 恢复动作后 5 分钟冷却，防 API 拉了又被外部关掉导致循环重启
