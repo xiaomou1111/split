@@ -341,6 +341,18 @@ int config_load(const char *path, struct split_config *cfg)
     if (declared_direct6 && cfg->ndirect6 == 0)
         LOG_WARNF("rules: 声明了 direct_cidr6 但无列表项，默认 v6 直连段（fe80::/10 等）已被清空");
 
+    /* v1.4.1（功能冲突审查）：跨字段静默失效告警——配置项叠加时一方被另一方静默吞掉
+     * （行为无提示），显式 WARN 防"以为生效"：
+     *  (a) attach_auto=on 时 iface_plan 走物理网卡分支，attach_list 被完全忽略（互斥）；
+     *  (b) ipv6=false 时 policy 第 2 步短路，proxy_cidr6/direct_cidr6/CNIP6 全不生效
+     *      （proxy6 是"意图相反"的真冲突；direct6/CNIP6 结果仍直连、属冗余不告警）。 */
+    if (cfg->attach_auto && cfg->nattach > 0)
+        LOG_WARNF("ifaces: attach_auto=on 时 attach_list 被忽略（已配 %d 个接口不生效）"
+                  "——两者互斥，如需精确挂载请设 attach_auto: false", cfg->nattach);
+    if (!cfg->ipv6_classify && cfg->nproxy6 > 0)
+        LOG_WARNF("default: ipv6=false 但 rules 配置了 proxy_cidr6（%d 条）——v6 一律直连，"
+                  "v6 代理规则不生效，如需代理 v6 请设 ipv6: true", cfg->nproxy6);
+
     return 0;
 }
 

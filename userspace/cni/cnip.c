@@ -10,8 +10,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <unistd.h>       /* fork/execlp/_exit */
-#include <fcntl.h>         /* FD_CLOEXEC（exec curl 前防 fd 泄漏） */
+#include <limits.h>        /* PATH_MAX（path_lookup 回落查找用） */
+#include <unistd.h>        /* fork/execl/_exit */
+#include <fcntl.h>         /* FD_CLOEXEC（exec 下载器前防 fd 泄漏） */
 #include <sys/socket.h>   /* AF_INET */
 #include <sys/wait.h>      /* WEXITSTATUS / waitpid */
 #include <arpa/inet.h>
@@ -90,26 +91,69 @@ int cnip_load_file(struct split_bpf_ctx *ctx, const char *path, int family)
     return cnip_from_path(ctx, path, family);
 }
 
-/* 审查修复（2026-08 全库审查批次）：CNIP 下载子进程以 root 运行，旧实现 execlp("curl")
- * 依赖 PATH 查找可执行文件——若 daemon 启动环境（Magisk service / WSL2 / systemd）的
- * PATH 含用户可写目录（如 Android /data/local/tmp），可被预置同名二进制替换成 root 代码
- * 执行。改为优先探测常见绝对路径，全部缺失才回落 PATH（并告警，提示把 curl 放到
- * /data/adb/split/bin/curl）。须在 fork 前（父进程）调用一次，结果由子进程继承 exec。 */
-static const char *cnip_find_curl(void)
+/* 在 PATH 中按名字查找可执行文件（回落场景）；返回静态缓冲里的完整路径，失败 NULL。 */
+static const char *path_lookup(const char *name)
 {
-    static const char *const cand[] = {
-        "/system/bin/curl",
-        "/system/xbin/curl",
-        "/data/adb/split/bin/curl",
-        "/usr/bin/curl",
-        "/bin/curl",
-    };
-    for (size_t i = 0; i < sizeof(cand) / sizeof(cand[0]); i++) {
-        if (access(cand[i], X_OK) == 0)
-            return cand[i];
+    const char *path = getenv("PATH");
+    static char buf[PATH_MAX];
+    const char *d;
+    size_t n;
+
+    if (!path || !path[0])
+        return NULL;
+    d = path;
+    for (;;) {
+        const char *e = strchr(d, ':');
+
+        n = e ? (size_t)(e - d) : strlen(d);
+        if (n > 0 && n + strlen(name) + 2 < sizeof(buf)) {
+            memcpy(buf, d, n);
+            buf[n] = '\0';
+            snprintf(buf + n, sizeof(buf) - n, "/%s", name);
+            if (access(buf, X_OK) == 0)
+                return buf;
+        }
+        if (!e)
+            break;
+        d = e + 1;
     }
-    LOG_WARNF("未找到常见路径下的 curl，回落 PATH 查找（PATH 可写时存在被替换风险）");
-    return "curl";
+    return NULL;
+}
+
+/* 审查修复（2026-08 全库审查批次）：CNIP 下载子进程以 root 运行，依赖 PATH 查找
+ * 可执行文件存在被预置同名二进制替换成 root 代码执行的风险——优先探测常见绝对路径。
+ * v1.4.1（CNIP 更新失败修复）：Android Magisk 环境通常没有 curl（cnip_find_curl 探测
+ * 全部落空 → exec 失败 exit 127 → 下载必失败，每 5 分钟重试死循环），补齐 wget/busybox
+ * 探测与 PATH 回落；全部缺失返回 NULL，由调用方明确报错而非 exec 后 exit 127 的模糊失败。
+ * 须在 fork 前（父进程）调用一次，结果由子进程继承 exec。 */
+static const char *cnip_find_downloader(int *is_curl)
+{
+    static const char *const curls[] = {
+        "/system/bin/curl", "/system/xbin/curl",
+        "/data/adb/split/bin/curl", "/usr/bin/curl", "/bin/curl",
+    };
+    static const char *const wgets[] = {
+        "/system/bin/wget", "/system/xbin/wget",
+        "/data/adb/split/bin/wget",
+        "/system/bin/busybox", "/system/xbin/busybox",
+        "/data/adb/split/bin/busybox",
+        "/usr/bin/wget", "/usr/bin/busybox",
+        "/bin/wget", "/bin/busybox",
+    };
+    const char *p;
+
+    for (size_t i = 0; i < sizeof(curls) / sizeof(curls[0]); i++)
+        if (access(curls[i], X_OK) == 0) { *is_curl = 1; return curls[i]; }
+    for (size_t i = 0; i < sizeof(wgets) / sizeof(wgets[0]); i++)
+        if (access(wgets[i], X_OK) == 0) { *is_curl = 0; return wgets[i]; }
+    p = path_lookup("curl");
+    if (p) { *is_curl = 1; return p; }
+    p = path_lookup("wget");
+    if (p) { *is_curl = 0; return p; }
+    p = path_lookup("busybox");
+    if (p) { *is_curl = 0; return p; }
+    LOG_WARNF("未找到 curl/wget/busybox（常见路径与 PATH 均无），无法自动更新 CNIP");
+    return NULL;
 }
 
 int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
@@ -117,15 +161,22 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
 {
     pid_t pid;
     int st = 0;
+    int is_curl = 1;
+    const char *tool;
 
-    /* v1.2.8（审查修复）：弃用 system()（shell 拼接注入面），改 fork + exec 直接跑
-     * curl——参数原样传给 execve，无 shell 解释，URL 中任何元字符（`;` `$()` 反引号等）
-     * 都只是 curl 的普通参数。curl 不存在/不可执行时子进程 _exit(127)，由 waitpid 收回
-     * 并报错。审查修复（2026-08 全库审查批次）：exec 用绝对路径（见 cnip_find_curl），
-     * 消除对可写 PATH 的依赖。 */
-    const char *curl_path = cnip_find_curl();
     if (strchr(url, '\'') || strchr(tmp_path, '\'')) {
         LOG_ERRORF("拒绝含单引号的 URL: %s", url);
+        return -1;
+    }
+    /* v1.2.8（审查修复）：弃用 system()（shell 拼接注入面），改 fork + exec 直接跑
+     * 下载器——参数原样传给 execve，无 shell 解释，URL 中任何元字符（`;` `$()` 反引号等）
+     * 都只是普通参数。exec 优先绝对路径（2026-08 审查批次），消除对可写 PATH 的依赖。
+     * v1.4.1（CNIP 更新失败修复）：Android Magisk 环境通常没有 curl，探测回落
+     * wget/busybox wget；全部缺失由 cnip_find_downloader 返回 NULL，此处明确报错。 */
+    tool = cnip_find_downloader(&is_curl);
+    if (!tool) {
+        LOG_ERRORF("未找到 curl/wget/busybox，无法自动更新 CNIP"
+                   "（请安装其一，或放置本地 CNIP 文件后 reload-cnip）");
         return -1;
     }
     pid = fork();
@@ -136,14 +187,25 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
     if (pid == 0) {
         /* v1.2.9（审查加固）：exec 前把继承的全部非标准 fd 置 CLOEXEC——
          * 本进程（daemon 派生的 CNIP 更新子进程）持有 BPF map fd、ctl listen、
-         * netlink watch 等；curl exec 后若继承它们，会成为"不可控进程持着
-         * 系统 fd"的脏现场（curl 短暂运行，危害小但应杜绝）。CLOEXEC 只在
+         * netlink watch 等；下载器 exec 后若继承它们，会成为"不可控进程持着
+         * 系统 fd"的脏现场（下载器短暂运行，危害小但应杜绝）。CLOEXEC 只在
          * exec 时生效，不影响本进程 exec 前/后续灌 CNIP 对 map fd 的使用。 */
         for (int fd = 3; fd < 256; fd++)
             fcntl(fd, F_SETFD, FD_CLOEXEC);
-        execl(curl_path, "curl", "-L", "--max-time", "60", "-s",
-              "-o", tmp_path, url, (char *)NULL);
-        /* 只有 exec 失败才到这里（curl 不存在/不可执行） */
+        if (is_curl) {
+            /* -f：HTTP >= 400 视为失败。旧实现缺 -f，404/502 会以 0 退出码把
+             * 错误页存进文件当成功 → rename 覆盖好文件 → cnip_apply 全量清空
+             * 重灌 0 条（CNIP 静默归零、直连分流失效的根因之一）。 */
+            execl(tool, "curl", "-f", "-L", "--max-time", "60", "-s",
+                  "-o", tmp_path, url, (char *)NULL);
+        } else if (strstr(tool, "busybox") != NULL) {
+            execl(tool, "busybox", "wget", "-q", "-T", "60", "-O",
+                  tmp_path, url, (char *)NULL);
+        } else {
+            execl(tool, "wget", "-q", "-T", "60", "-O",
+                  tmp_path, url, (char *)NULL);
+        }
+        /* 只有 exec 失败才到这里（下载器不存在/不可执行） */
         _exit(127);
     }
     /* EINTR 重试：daemon 的信号处理只置 g_stop，SIGINT/SIGTERM 会中断 waitpid
@@ -161,7 +223,29 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
                    WIFEXITED(st) ? WEXITSTATUS(st) : -1, url);
         return -1;
     }
-    return cnip_from_path(ctx, tmp_path, family);
+
+    /* 解析下载内容并校验非空：0 条有效 CIDR = 拿到错误页/空文件（如镜像返回 200 的
+     * HTML），直接弃用并 return -1，避免 cnip_fetch_to_path 把坏文件 rename 覆盖好
+     * 文件。若此处放行，坏文件会经 cnip_apply 全量清空重灌 → CNIP 归零。真正的 map
+     * 灌入仍由 cnip_apply 完成（fetch 成功 rename 到正式 path 后统一重灌）。 */
+    {
+        FILE *fp = fopen(tmp_path, "r");
+        unsigned int ok = 0, bad = 0;
+
+        if (!fp) {
+            LOG_ERRORF("打开下载文件失败: %s (%s)", tmp_path, strerror(errno));
+            return -1;
+        }
+        cnip_load_fd(ctx, fp, family, &ok, &bad);
+        fclose(fp);
+        LOG_INFOF("CNIP(%s) 下载并解析: %u 条, 失败 %u 条 (%s)",
+                  family == AF_INET ? "v4" : "v6", ok, bad, url);
+        if (ok == 0) {
+            LOG_ERRORF("下载内容无有效 CIDR（疑似错误页/空文件），弃用: %s", tmp_path);
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int cnip_apply(struct split_bpf_ctx *ctx, const struct split_config *cfg)
@@ -213,21 +297,32 @@ static int cnip_fetch_to_path(struct split_bpf_ctx *ctx,
 
 int cnip_auto_update(struct split_bpf_ctx *ctx, const struct split_config *cfg)
 {
-    int r4, r6;
+    int v4_cfg, v6_cfg;
+    int r4 = 0, r6 = 0;
 
-    if (!cfg->cnip4_url[0] && !cfg->cnip6_url[0])
-        return 0; /* 未配置数据源，无可用更新 */
+    /* "配置" = url 与本地落盘 path 都给了：cnip_fetch_to_path 对空 url/path 是
+     * no-op 返回 0——若直接把它当"成功"，单族配置的族下载失败时 r_other==0 会让
+     * "全部失败"判定失效（v1.4.1 修复：失败被静默吞掉、不重试、还误报未配置族
+     * 失败）。故先显式区分"配置族 vs 未配置族"。 */
+    v4_cfg = cfg->cnip4_url[0] && cfg->cnip4_path[0];
+    v6_cfg = cfg->cnip6_url[0] && cfg->cnip6_path[0];
 
-    r4 = cnip_fetch_to_path(ctx, cfg->cnip4_url, cfg->cnip4_path, AF_INET);
-    r6 = cnip_fetch_to_path(ctx, cfg->cnip6_url, cfg->cnip6_path, AF_INET6);
+    if (!v4_cfg && !v6_cfg)
+        return 0; /* 未配置任何可更新数据源（url 有但缺 path 的族不可能落盘，同 v1.3.1 判定） */
 
-    /* 至少一个成功下到本地才落 map；但因 apply 是全量清空重灌，部分失败族
-     * 会按"本地旧文件"重写（用旧数据），在此显式点明，避免误以为该族已更新。 */
-    if (r4 != 0 && r6 != 0)
-        return -1; /* 全部失败返回 -1，让上层下次再试 */
-    if (r4 != 0)
-        LOG_WARNF("CNIP v4 下载失败，将沿用本地旧文件重灌；v6 已更新");
-    if (r6 != 0)
-        LOG_WARNF("CNIP v6 下载失败，将沿用本地旧文件重灌；v4 已更新");
+    if (v4_cfg)
+        r4 = cnip_fetch_to_path(ctx, cfg->cnip4_url, cfg->cnip4_path, AF_INET);
+    if (v6_cfg)
+        r6 = cnip_fetch_to_path(ctx, cfg->cnip6_url, cfg->cnip6_path, AF_INET6);
+
+    /* 只对"配置了的族"判定成败；未配置族既不是成功也不是失败。
+     * 至少一个配置族成功才落 map；但因 apply 是全量清空重灌，失败族会按
+     * "本地旧文件"重写（用旧数据），在此显式点明，避免误以为该族已更新。 */
+    if (v4_cfg && r4 != 0)
+        LOG_WARNF("CNIP v4 下载失败，将沿用本地旧文件重灌");
+    if (v6_cfg && r6 != 0)
+        LOG_WARNF("CNIP v6 下载失败，将沿用本地旧文件重灌");
+    if ((!v4_cfg || r4 != 0) && (!v6_cfg || r6 != 0))
+        return -1; /* 全部配置族失败 → 让上层稍后重试 */
     return cnip_apply(ctx, cfg);
 }

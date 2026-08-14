@@ -50,6 +50,13 @@
   `cnip4=(未配置)`。可能 v1.1.5 收紧 is_section 判据时漏了 `\n`。）**修复：`p[n+1]` 增加
   `=='\n'` 分支。** `section_inline_warn` 本就排除 `\n`，无连带误报。
 - `config_dump` 是 debug 用，输出格式被 cli `validate` 复用——改格式同步 cli。
+- 坑 12（v1.4.1 功能冲突审查）：**跨字段静默失效告警**——两处配置叠加时旧实现静默吞掉
+  一方，现解析结束补 WARN：
+  (a) `attach_auto=true`（含默认值）时 `iface_plan` 走物理网卡分支，**attach_list 被完全忽略**
+  （iface.c 两分支互斥）——`attach_auto && nattach>0` 即 WARN，提示设 `attach_auto: false` 才生效；
+  (b) `default: ipv6=false` 时 policy 第 2 步短路，proxy_cidr6/direct_cidr6/CNIP6 全不生效——
+  `!ipv6_classify && nproxy6>0` 即 WARN（proxy6 是"意图相反"的真冲突；direct6/CNIP6 结果仍直连、
+  属冗余不告警）。两处均为解析期提示，不改裁决语义。
 
 ## netlink — 接口发现/监听（不依赖 iproute2）
 - `iface_scan`：RTM_GETLINK + NLM_F_DUMP，解析 IFLA_IFNAME；**只取名字+ifindex+type+flags**，无 mac/addr。

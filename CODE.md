@@ -1,6 +1,6 @@
 # 代码说明书（CODE.md）
 
-> eBPF-Split v1.4.0 ｜ 面向：想读懂/改这份代码的开发者
+> eBPF-Split v1.4.1 ｜ 面向：想读懂/改这份代码的开发者
 > 先读：`README.md`（架构总览）→ 本文（代码细节）→ 各模块 `MEMORY.md`（改前必读）
 
 ---
@@ -128,7 +128,7 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 
 - Unix socket（`split_socket_path()`，默认 /run/splitd.sock）
 - **单命令一连接**：回复后 return 0 即 close（防死锁，勿改多命令循环）
-- 命令：`stats`/`status`/`list-rules`（v1.2.2）/`reload-cnip`/`reload`/`add-rule <cidr> [proxy|direct]`/`del-rule <cidr> [proxy|direct]`/`stop`
+- 命令：`stats`/`status`/`list-rules`（v1.2.2）/`reload-cnip`/`update-cnip`（v1.4.1 手动更新 CNIP）/`reload`/`add-rule <cidr> [proxy|direct]`/`del-rule <cidr> [proxy|direct]`/`stop`
 - 回复：首行 `OK/ERR`，数据行，末行 `END`
 - **`status`（v1.1.3 扩展）**：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>`；
   其后可能跟 `WARN ...` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管）——WebUI app.js 解析这些字段，改格式必须同步

@@ -81,10 +81,13 @@ cnip:
 
 > linux 桌面请改成自己的绝对路径（如 /etc/split/cn_cidr_v4.txt）。
 > 两个 path 都留空 = 纯规则分流（不做 CNIP）。
-> **自动更新**：daemon 每 `auto_update_hours`（默认 24=每天）用 `curl` 下载 `url_v4/v6`
+> **自动更新**：daemon 每 `auto_update_hours`（默认 24=每天）用下载器下载 `url_v4/v6`
 > 到 `path_v4/v6` 覆盖本地文件，再全量重灌 `map_cnip4/6`（先清空后写入，幂等）。
-> 依赖 `curl`/`wget`（Android Magisk 环境通常没有 curl，见 cni/MEMORY——此时可留空 url，
-> 只按间隔重读本地文件，或外部脚本跑 `fetch-cnip.sh` + `splitctl reload-cnip`）。
+> 下载器探测顺序：curl → wget/busybox（绝对路径优先，回落 PATH；Android Magisk 环境通常
+> 没有 curl，有 busybox 即可，见 cni/MEMORY）。下载失败 / HTTP 错误 / 内容 0 条时**沿用本地
+> 旧文件**，不覆盖不重灌（不会把 CNIP 清空归零）。无任何下载器时留空 url、只按间隔重读本地
+> 文件，或外部脚本跑 `fetch-cnip.sh` + `splitctl reload-cnip`；`splitctl update-cnip`
+> （v1.4.1 手动更新）与自动更新同路径。
 > Android 可直接复用 box 的 `cn.zone`/`cn_ipv6.zone` 改名后用（每行 CIDR，格式兼容）。
 
 ## 6. 内置直连段（policy 硬编码，无需配置）
@@ -113,7 +116,8 @@ IPv6:  ::1/128（回环）  fe80::/10（链路本地）  ff00::/8（组播）
 
 ```bash
 splitctl reload            # 读配置 → 增量更新 maps（不重编译/不掉线）
-splitctl reload-cnip       # 只刷新 CNIP（v1.0.5 起为"先清空再全量重灌"，非追加）
+splitctl reload-cnip       # 只刷新 CNIP（v1.0.5 起为"先清空再全量重灌"，非追加；v1.4.1 起后台执行）
+splitctl update-cnip       # 手动更新 CNIP（v1.4.1）：重新下载 url_v4/v6 后重灌（后台执行）
 ```
 
 > 注意：v1.0.5 起 reload 是"先清空再全量写入"（幂等），配置里删掉的规则/UID/CNIP 段会一并移除，无需重启 daemon。

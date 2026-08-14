@@ -161,7 +161,7 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 - **后端**：`scripts/webuiapi.sh`（经 `ksu.exec` 以 root 调 `/data/adb/split/scripts/webuiapi.sh <action>`）。
   为什么放 scripts/ 而非 webroot/：webroot 由 KernelSU 设定为网页服务上下文，脚本放运行期目录
   `/data/adb/split/scripts/` 与既有 start/stop 一致，也避开执行权限歧义。
-- **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
+- **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/**update-cnip（v1.4.1）**/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
   行数 n 走整型白名单（非纯数字回退 200），`tail` → `busybox tail` → `cat` 兜底；日志尾按行截断避免打爆 WebView。
   action 由 case 分支映射，**不透传任意 shell **；参数经 shell 引号包裹（单引号 CIDR）防注入。
 - **env 动作（WebUI 完善）**：环境信息 `key=value` 行——kernel/arch（uname）、android/sdk/device（getprop）、
@@ -174,6 +174,15 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   （app.js 按 `key=value` 正则解析）；
   `mihomo-start` 与 service.sh 同源逻辑（先调 fix-mihomo-tun.sh 对齐 auto-route:false，再 `-d $MIHOMO_DIR` 起，3 次重试）；
   `mihomo-stop` 用 `pkill -f "$MIHOMO_BIN"`（注意 `pgrep -f` 匹配 /data/adb/split/bin/mihomo 全路径，避免误杀其它）。
+- **update-cnip（v1.4.1，WebUI"更新 CNIP"按钮）**：与 `reload-cnip`（只重读本地文件重灌）不同，走
+  `splitctl update-cnip` → daemon 触发一次与定时自动更新相同的"下载 url_v4/v6 → 原子落盘 → 全量重灌"
+  （cnip.c 的 `cnip_auto_update`）。**下载耗时所以是后台执行**（v1.4.1 起 `reload-cnip` 同样
+  后台执行，与 update-cnip 共用 `g_cnip_req` 统一 fork 调度）：daemon ctl 分支只置
+  `g_cnip_req=CNIP_REQ_UPDATE` + 提前 `cnip_next_ms`，主循环下一轮 poll 迭代 fork 子进程下载，ctl 立即回
+  `OK 已安排 CNIP 更新`——前端 app.js 点按钮只收到"已安排"，进度看 splitd.log、CNIP 计数靠状态面板
+  5s 轮询刷新。未配 `url_v4/url_v6` → `ERR 未配置 CNIP 数据源`；更新进行中（`g_cnip_busy`）→
+  `ERR CNIP 更新进行中`。Android 无任何下载器（curl/wget/busybox，v1.4.1 起有回落）时下载失败
+  会落本地旧文件重灌（cni/MEMORY 既有语义）。
 - **前端（WebUI 完善，v1.2.x）**：状态面板 5s 轮询补 `env`；运行状态卡新增 TUN ifindex（0=缺失放行标黄）、
   splitd PID、存活守护、运行时长；新增"环境信息"卡（内核/架构/Android/SDK/设备/SELinux）；stats 计数做
   增量速率 `+N/s`（与上一轮对比，daemon 重启计数回退显示 ↻）并着色——直连/代理增长绿色、parse_err/

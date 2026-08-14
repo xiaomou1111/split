@@ -59,7 +59,7 @@
 
 - `parse` 越界 → 返回 0（不可判），上层放行。
 - `policy` 判定顺序固定（policy.h 注释即真相）：skip_uid → v6 不分类直连（ipv6_classify=false）→ 内置本地段 → proxy → direct → CNIP → default。
-- ctl 协议：Unix socket **单命令一连接**，回复后即 close；命令前缀 `stats/status/list-rules/reload/reload-cnip/add-rule/del-rule/stop`。
+- ctl 协议：Unix socket **单命令一连接**，回复后即 close；命令前缀 `stats/status/list-rules/reload/reload-cnip/update-cnip/add-rule/del-rule/stop`。
 - LPM key 字节序：`prefixlen` 在前（`lpm_key4/6` 与用户态需字节级一致）。
 - tc attach 固定 `handle=1 priority=10`；detach 必须传相同值。
 - 打包配置只含占位符（`YOUR_*`），原始敏感配置（`config.yaml.real`）不得入库。

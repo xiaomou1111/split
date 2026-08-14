@@ -143,7 +143,9 @@ L4 平台胶水     android/magisk
   精确匹配命中/设备缺失时清零恢复重新搜寻，漂移 WARN 仅首次对齐打一次。
 
 ### 2.5 cli/ splitctl
-- 子命令：`start stop status stats list-rules reload reload-cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
+- 子命令：`start stop status stats list-rules reload reload-cnip update-cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
+  `update-cnip`（v1.4.1）：手动触发 CNIP 更新——与 `reload-cnip`（只重读本地文件）不同，会重新下载
+  `cnip.url_v4/url_v6` 后全量重灌（复用定时自动更新的后台 fork 路径，ctl 立即回"已安排"）。
 - `list-rules`（v1.2.2）：逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表用。
 - `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 10s 自检路由接管，变化即打日志。
   **v1.2.8（审查修复）**：`hijack` 字段读主循环 10s 节流缓存的 `g_hijack_now`（含 -1=检测失败），

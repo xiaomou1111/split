@@ -8,7 +8,9 @@
   `-b /data/adb/split/bin/split.bpf.o`（webuiapi.sh 已带）。**v1.1.9：`-d`（零参）从"splitd 路径"
   改为 debug，路径改由 `-s` 指定**——与 daemon 的 `-d` 语义对齐；splitctl 收到 `-d` 会把它转发给
   派生 splitd（`splitd -d` 即 debug）。无脚本依赖旧 `-d=路径`（grep 已核实）。
-- `stop` / `status` / `stats` / `reload` / `reload-cnip`：经 socket 单命令发送。
+- `stop` / `status` / `stats` / `reload` / `reload-cnip` / `update-cnip`：经 socket 单命令发送。
+  `update-cnip`（v1.4.1）：手动触发 CNIP 更新（daemon 走"下载 url_v4/v6 + 重灌"后台路径，ctl 立即回
+  "已安排"，进度看 splitd.log）——区别于 `reload-cnip`（只重读本地文件）。
 - `list-rules`（v1.2.2）：经 socket 发送，逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表展示/删除用。
 - `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]`：经 socket 发送到 daemon（v1.0.1 已实现）。
 - `validate -c cfg`：本地 `config_load` + `config_dump`，不碰 daemon。

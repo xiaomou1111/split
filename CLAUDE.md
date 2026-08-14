@@ -58,7 +58,7 @@ split.bpf.c（唯一入口）──> parse.h（安全解析）──> policy.h�
 
 **用户态** `userspace/`（C + libbpf≥1.0，无其它第三方依赖）：
 - `splitd`（daemon/daemon.c）：生命周期、ctl 协议、iface 挂载自愈心跳（5s）、tun ifindex 存活同步（1s 心跳）、CNIP 定时刷新（fork 子进程）。
-- `splitctl`（cli/）：`start stop status stats list-rules reload reload-cnip add-rule del-rule validate`，经 Unix socket 与 daemon 通信。
+- `splitctl`（cli/）：`start stop status stats list-rules reload reload-cnip update-cnip add-rule del-rule validate`，经 Unix socket 与 daemon 通信。
 - 模块划分：common（log/config 极简 YAML/netlink/paths）、loader（加载+tc 挂载）、cni（CNIP）、rule（规则）。
 
 模块原则：一模块一目录一职责；**只有 `maps.h`（内核）与 `loader.h`（用户态）暴露全局 map**，其余模块经 map 名解耦。
@@ -70,7 +70,7 @@ splitd 退出码契约（daemon/MEMORY，改必同步 android/magisk/service.sh�
 - **`-mcpu=v1` 必须保留**：Android 5.x GKI verifier 只认老 `BPF_XADD`，去掉会在真机报 `BPF_STX uses reserved fields`。**WSL2 能过 ≠ 真机能过**。
 - **`bpf_redirect(tun, 0)` 前必须先 `skb->queue_mapping = 0`**：多队列物理网卡 egress 继承的 queue_mapping>0 会让单队列 tun `tfile=NULL` 直接丢包。
 - **policy 判定顺序固定（7 步，policy.h 注释即真相）**：skip_uid → v6 且 ipv6_classify=0 → 内置本地段 → proxy → direct → CNIP → default。改顺序 = 改分流语义，必须同步 docs/01、docs/02、README。
-- **ctl 协议**：Unix socket，**单命令一连接**（回复后即 close，勿改回多命令循环）；命令前缀 `stats/status/list-rules/reload/reload-cnip/add-rule/del-rule/stop`；回复首行 `OK/ERR`、末行 `END`。`status` 字段与 WARN 行被 WebUI app.js 解析，改格式必须同步 app.js。
+- **ctl 协议**：Unix socket，**单命令一连接**（回复后即 close，勿改回多命令循环）；命令前缀 `stats/status/list-rules/reload/reload-cnip/update-cnip/add-rule/del-rule/stop`；回复首行 `OK/ERR`、末行 `END`。`status` 字段与 WARN 行被 WebUI app.js 解析，改格式必须同步 app.js。
 - **LPM key 字节序**：`prefixlen` 在前（内核 `lpm_key4/6` 与用户态 k4/k6 需字节级一致）。
 - **tc attach 固定 `handle=1 priority=10`**；detach 必须传相同值；attach 必须带 `BPF_TC_F_REPLACE`（防残留 filter 静默失效）。
 - **读 map value 的变量下标必须显式掩码到 `< 2 的幂` 且无条件前置**（放守卫内会被 clang 折叠掉，真机 5.x verifier 拒载）；勿对栈数组做变量偏移读（改读同内容 map value + 掩码）。此铁律曾沉淀自域名规则（v1.4.0 整模块移除，见 kernel/bpf/MEMORY 第 19 条），仍适用于任何读 map value 变量下标的代码。

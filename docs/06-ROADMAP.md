@@ -38,6 +38,7 @@
 | `del-rule`（在线删规则） | 已实现 | `bpf_map__delete_elem` 走 LPM_TRIE delete；cli → daemon 协议已支持 |
 | TUN 以太网头 | 无需处理 | WSL2 实测：`bpf_redirect` 到 /IFF_TUN 时 tun xmit 自动剥 L2，mihomo 读到裸 IP；手动 `bpf_skb_adjust_room` 反而会损坏 IP 头（已回滚） |
 | rule map 全量重建 | 已实现（v1.0.5） | `reload` 用 `map_rule_clear` 先清空再全量写（幂等），删减配置无需重启；CNIP 的 `reload-cnip` 同理（`map_cnip_clear`） |
+| CNIP 自动更新下载器 | 已解决（v1.4.1） | 依赖 curl 的缺口补齐：绝对路径优先，回落 wget/busybox（Android 常无 curl）；下载失败/HTTP 错误/内容 0 条沿用本地旧文件，不把 CNIP 清空（见 cni/MEMORY） |
 | VLAN 双层/多标签 | 双层（v1.1.x）| parse 跳至双标签 QinQ（`VLAN_MAX_TAGS=2`）；三标签以上等 roadmap |
 | ICMP 进 mihomo | 内核侧 OK | mihomo 侧对部分 ICMP 支持有限（见 FAQ Q 章节） |
 | ingress 钩子（观察/统计入站） | 未做 | 为省性能刻意不做 |
@@ -93,7 +94,28 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.0（当前）        移除域名分流（DNS 学习器）整模块，主线回归纯 IP/UID 分流：
+v1.4.1（当前）        CNIP 更新失败修复 + update-cnip 手动更新（统一后台调度）：
+                      ①**CNIP 更新失败修复**（根因 3 个，见 cni/MEMORY）：
+                        a. 下载器回落：Android Magisk 常无 curl，旧实现绝对路径探测全空 →
+                          exec 失败 exit 127 → 每 5 分钟死循环重试。现补齐 wget/busybox 探测
+                          （绝对路径优先，回落 PATH 查找），全缺失由调用方明确报错（不再
+                          fork 空转）；curl 加 `-f`（HTTP>=400 失败）
+                        b. 下载内容 0 条校验：404/502 错误页/空文件不再以 0 退出码被当成功
+                          → rename 覆盖好文件 → cnip_apply 全量清空重灌 → CNIP 静默归零、
+                          直连分流失效（本次修复的核心根因）
+                        c. 配置族判定：仅 url+path 都配的族参与成败判定——单族配置时该族
+                          下载失败不再被未配置族"成功"吞掉、不再误报未配置族失败、失败
+                          会走 return -1 稍后重试；失败族沿用本地旧文件重灌不归零
+                      ②**update-cnip 手动更新 + 统一后台调度**：新增 `splitctl update-cnip`
+                        与 WebUI "更新 CNIP"按钮（下载 url_v4/v6 后重灌）；`reload-cnip` 改
+                        后台执行（旧同步 cnip_apply 阻塞 poll 主循环数秒）；定时/补拉/
+                        update-cnip/reload-cnip 统一走 g_cnip_req 请求位 + fork 子进程路径，
+                        共用 g_cnip_busy 并发闸，ctl 只置位立即回"已安排"
+                      ③**配置冲突告警（功能冲突审查）**：attach_auto=on 时 attach_list 被忽略、
+                        ipv6=false 却配 proxy_cidr6（意图相反的静默失效）——解析结束显式 WARN，
+                        不改裁决语义
+                      ④文档 / 各 MEMORY 全量同步；版本号 1.4.1（bump-version.sh）
+v1.4.0        移除域名分流（DNS 学习器）整模块，主线回归纯 IP/UID 分流：
                        ①内核 policy 8 步 → 7 步（删原第 4 步域名规则）；删 dom.h 与 4 个 map
                          （map_dns4/6、map_dom_proxy/direct，map 15 → 11）；split_bpf.h 删
                          struct dns_entry/dom_key/dom_rule、SPLIT_DOM_MAX、cfg.dom_enabled；

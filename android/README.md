@@ -1,6 +1,6 @@
 ﻿# 安卓兼容层（android/）
 
-本目录是 **eBPF-Split（v1.4.0）的安卓落地包**。核心逻辑与桌面 Linux 完全一致，
+本目录是 **eBPF-Split（v1.4.1）的安卓落地包**。核心逻辑与桌面 Linux 完全一致，
 这里解决的是安卓特有的三件事：
 
 1. **权限**：root（Magisk/KernelSU）+ SELinux 放行（sepolicy / magiskpolicy）

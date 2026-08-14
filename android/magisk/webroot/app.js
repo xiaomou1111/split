@@ -460,12 +460,14 @@ function bindActions() {
     $('act-result').textContent = r.text;
     console.log('[daemon]', b.dataset.cmd, r.text);
     await refreshStatusPanel();
+    if (!r.err && b.dataset.msg) showToast(b.dataset.msg);
     if (b.dataset.cmd === 'reload' || b.dataset.cmd === 'reload-cnip') loadCfgSummary();
   });
   btnHit($('act-start'));
   btnHit($('act-stop'));
   btnHit($('act-reload'));
   btnHit($('act-reload-cnip'));
+  btnHit($('act-update-cnip'));
 
   const btnMihomo = (b, okMsg) => b.addEventListener('click', async () => {
     const r = await callApi(b.dataset.cmd);

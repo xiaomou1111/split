@@ -52,15 +52,27 @@ static int g_hijack_now = 0;
 static int tun_sync(struct split_bpf_ctx *ctx, const struct split_config *cfg,
                     const struct iface_list *snap);
 /* CNIP 写锁（H2 显式化）：
- * CNIP map（map_cnip4/6）的写入方只有两个，且必须互斥——
- *   A. 定时/补拉 auto-update：fork 出子进程后由子进程灌入；
- *   B. 用户 `reload-cnip`：主线程同步灌入。
- * g_cnip_busy 在 fork 前置位、子进程回收后清位；reload-cnip 见位即拒绝，
- * 从而保证"任一时刻只有一个写入方在清空+写 CNIP map"。
+ * CNIP map（map_cnip4/6）的写入方只有 fork 子进程一个（三种触发共用），
+ * 主线程永不同步重灌——
+ *   A. auto-update（定时/补拉）；
+ *   B. 用户 `update-cnip`（手动下载+重灌）；
+ *   C. 用户 `reload-cnip`（只重读本地文件重灌）。
+ * 三者都经 g_cnip_req 请求位 + 把 cnip_next_ms 提前到 now，由主循环下一轮
+ * poll 迭代 fork 子进程灌入——cnip_apply 的全量清空重灌（~6.5 万条 LPM 写入）
+ * 与 cnip_auto_update 的下载都耗时，同步执行会阻塞 poll 主循环。
+ * g_cnip_busy 在 fork 前置位、子进程回收后清位；reload-cnip / update-cnip
+ * 见位即拒绝，从而保证"任一时刻只有一个写入方在清空+写 CNIP map"。
  * 注意：`reload`（rule_apply_all）只碰 rule map、不碰 CNIP map，
  * 与子进程的 CNIP 灌入天然无交集——若未来给 reload 增加 CNIP 重灌，
  * 必须在此处同步加 g_cnip_busy 检查，否则破坏该不变式。 */
 static volatile sig_atomic_t g_cnip_busy = 0;
+/* CNIP 手动/重灌请求（v1.4.1 统一调度）：CNIP_REQ_NONE=无；CNIP_REQ_UPDATE=
+ * 下载+重灌（WebUI/`splitctl update-cnip`）；CNIP_REQ_RELOAD=只重读本地文件
+ * 重灌（`reload-cnip`）。ctl 分支只置位 + 把 cnip_next_ms 提前到 now，由主循环
+ * 下一轮 fork 子进程执行；fire 后清零（一次请求 fire 一次，失败不自动重试）。
+ * 更新进行中（g_cnip_busy=1）时 ctl 分支直接拒绝、不置位，无排队竞态。 */
+enum { CNIP_REQ_NONE = 0, CNIP_REQ_UPDATE = 1, CNIP_REQ_RELOAD = 2 };
+static volatile sig_atomic_t g_cnip_req = CNIP_REQ_NONE;
 
 /* v1.2.5：最近一次确认有效的 tun ifindex（名字漂移兜底的基准）。
  * mihomo 重建的新 TUN 一定是新建接口（ifindex 单调递增），用它排除
@@ -378,16 +390,40 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         map_rule_foreach(ctx, RULE_DIRECT, ctl_rule_line, &priv);
         ctl_reply(c, "END");
     } else if (cmd_is(cmd, "reload-cnip")) {
-        /* v1.1.6：CNIP 更新子进程运行中时拒绝并发重灌，避免两进程同时
-         * "清空→写入"同一组 LPM_TRIE map 产生瞬时缺失/交错。 */
+        /* v1.4.1：改为后台重灌（与 update-cnip/定时更新统一走 fork 子进程）——
+         * cnip_apply 是全量清空重灌（~6.5 万条 LPM 写入，数秒），同步跑会阻塞
+         * poll 主循环（顺延 tun_sync/reconcile/新 ctl）。此处只置 CNIP_REQ_RELOAD
+         * + 提前 cnip_next_ms，由主循环下一轮 fork 子进程执行；结果见 splitd.log
+         * / status 的 cnip4/6 计数。无本地路径时 cnip_apply 本就是 no-op（不清空），
+         * 直接返回成功。 */
         if (g_cnip_busy) {
             ctl_reply(c, "ERR CNIP 更新进行中，请稍后重试");
             ctl_reply(c, "END");
-        } else if (cnip_apply(ctx, cfg) == 0) {
-            ctl_reply(c, "OK");
+        } else if (!cfg->cnip4_path[0] && !cfg->cnip6_path[0]) {
+            ctl_reply(c, "OK 未配置 CNIP 本地路径，无需刷新");
             ctl_reply(c, "END");
         } else {
-            ctl_reply(c, "ERR");
+            g_cnip_req = CNIP_REQ_RELOAD;
+            *cnip_next_ms = now_ms();
+            ctl_reply(c, "OK 已安排 CNIP 重灌（后台执行，进度见 splitd.log）");
+            ctl_reply(c, "END");
+        }
+    } else if (cmd_is(cmd, "update-cnip")) {
+        /* v1.4.1（手动更新 CNIP，WebUI "更新 CNIP"按钮）：
+         * 触发一次与定时自动更新相同的"下载+重灌"，而非只重读本地文件。
+         * 下载不能阻塞主循环，故不在此同步执行——置 g_cnip_req=CNIP_REQ_UPDATE 并
+         * 提前 cnip_next_ms 到 now，主循环下一轮 poll 迭代走既有 fork 子进程路径
+         * （复用 g_cnip_busy 并发闸；本次只做校验与调度）。 */
+        if (g_cnip_busy) {
+            ctl_reply(c, "ERR CNIP 更新进行中，请稍后重试");
+            ctl_reply(c, "END");
+        } else if (!cfg->cnip4_url[0] && !cfg->cnip6_url[0]) {
+            ctl_reply(c, "ERR 未配置 CNIP 数据源（cnip.url_v4/url_v6），无法更新");
+            ctl_reply(c, "END");
+        } else {
+            g_cnip_req = CNIP_REQ_UPDATE;
+            *cnip_next_ms = now_ms();
+            ctl_reply(c, "OK 已安排 CNIP 更新（后台下载，进度见 splitd.log）");
             ctl_reply(c, "END");
         }
     } else if (cmd_is(cmd, "reload")) {
@@ -870,19 +906,31 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
         int nfds = 0, rc;
         int lfd_idx = -1, evfd_idx = -1;
 
-        /* CNIP 定时自动更新（auto_update_hours，0=关闭；v1.1.3：cnip_boot_once
-         * 时即使 hours=0 也补拉一次）。
-         * 配置了 url_v4/v6 则先下载刷新本地文件，再全量重灌。
-         * 下载可能耗时数分钟（curl --max-time 60 ×2），必须 fork 子进程执行，
+        /* CNIP 更新调度（定时/补拉/update-cnip/reload-cnip 统一走此路径）：
+         * - 定时：auto_update_hours，0=关闭；v1.1.3 起 cnip_boot_once 时即使
+         *   hours=0 也补拉一次；
+         * - 手动：g_cnip_req=CNIP_REQ_UPDATE（下载+重灌）或 CNIP_REQ_RELOAD
+         *   （只重灌本地文件）。
+         * 配置了 url_v4/v6 则先下载刷新本地文件，再全量重灌；下载可能耗时数分钟
+         * （curl --max-time 60 ×2）、重灌也有数秒批量写，都必须 fork 子进程执行，
          * 否则 poll 主循环被阻塞：网络事件/ctl 命令都会停摆。
          * 子进程继承 ctx 的 map fd，可直接灌入；父进程 waitpid 回收。 */
-        if ((cfg.cnip_auto_update_hours > 0 || cnip_boot_once) &&
+        if ((cfg.cnip_auto_update_hours > 0 || cnip_boot_once ||
+             g_cnip_req != CNIP_REQ_NONE) &&
             now_ms() >= cnip_next_ms && cnip_pid == 0) {
-            if (cnip_boot_once)
+            int req = g_cnip_req; /* 手动请求类型（fork 前捕获；子进程继承此栈值） */
+
+            if (req == CNIP_REQ_RELOAD) {
+                LOG_INFOF("CNIP 重灌（reload-cnip，后台）");
+            } else if (req == CNIP_REQ_UPDATE) {
+                LOG_INFOF("CNIP 手动更新（update-cnip，后台下载）");
+            } else if (cnip_boot_once) {
                 LOG_INFOF("CNIP 缺失补拉启动（一次）");
-            else
+            } else {
                 LOG_INFOF("CNIP 定时自动更新（每 %d 小时）", cfg.cnip_auto_update_hours);
-            g_cnip_busy = 1; /* 置忙：fork 期间与灌入期间拒绝 reload-cnip（防双写） */
+            }
+            g_cnip_req = CNIP_REQ_NONE; /* 一次请求 fire 一次；失败不自动重试（用户可再点） */
+            g_cnip_busy = 1; /* 置忙：fork 期间与灌入期间拒绝 reload-cnip/update-cnip（防双写） */
             cnip_pid = fork();
             if (cnip_pid == 0) {
                 int r;
@@ -895,7 +943,10 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 if (lfd >= 0) close(lfd);
                 if (evfd >= 0) close(evfd);
                 if (lock_fd > 0) close(lock_fd);
-                r = cnip_auto_update(&ctx, &cfg);
+                if (req == CNIP_REQ_RELOAD)
+                    r = cnip_apply(&ctx, &cfg);
+                else
+                    r = cnip_auto_update(&ctx, &cfg);
                 _exit(r == 0 ? 0 : 1);
             }
             if (cnip_pid < 0) {

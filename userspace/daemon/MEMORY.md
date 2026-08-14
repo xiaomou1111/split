@@ -37,14 +37,26 @@
    命令协议不变（单命令一连接、回复后 close）。v1.0.6 起的"poll 一次 + read 一次"实现只对单次小 write 有效，
    勿回退。**发送方必须带 `'\n'` 终止**（splitctl send_cmd 已同步；协议契约，新增发送方必看）。
    **v1.1.6 加固：缓冲满仍未收到 '\n'（`truncated`）→ 直接回 `ERR 命令过长\nEND` 并 return**，不再按截断串解析——避免"收到半截规则"的歧义。
-- 命令：`stats` / `status` / `reload-cnip` / `reload` / `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]` / `stop` / **`list-rules`（v1.2.2）**；未知 → `ERR 未知命令`。
-- **`reload-cnip`（v1.1.6 防并发双写）**：CNIP 更新子进程运行中（`g_cnip_busy=1`）时回
-  `ERR CNIP 更新进行中`——父进程 `cnip_apply`（reload-cnip）与 fork 子进程同写一组 CNIP
-  LPM_TRIE map 是"清空→写入"交错，会产生瞬时 CNIP 缺失。忙标志在 fork 前置 1、fork 失败/
-  waitpid 回收后清 0。`reload` 不写 CNIP map（只重放 rule/uid 与接口），无需此闸。
-  **v1.2.0（H2）显式化不变式**：CNIP map 的写入方只有"fork 的 auto-update 子进程"与
-  "reload-cnip 主线程"，二者靠 `g_cnip_busy` 互斥；若未来给 `reload` 增加 CNIP 重灌，
-  必须同步加 `g_cnip_busy` 检查，否则破坏该单写方不变式。
+- 命令：`stats` / `status` / `reload-cnip` / **`update-cnip`（v1.4.1）** / `reload` / `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]` / `stop` / **`list-rules`（v1.2.2）**；未知 → `ERR 未知命令`。
+- **`reload-cnip`（v1.4.1 起后台执行；v1.1.6 起防并发双写）**：只重读本地文件全量重灌
+  （`cnip_apply`，"清空→写入"）。**v1.4.1（G1 统一调度）**：与 `update-cnip`/定时更新
+  一样走 fork 子进程——ctl 分支校验（`g_cnip_busy` 忙拒绝 / 无 path 直接 OK）后置
+  `g_cnip_req=CNIP_REQ_RELOAD` + 提前 `cnip_next_ms`，主循环下一轮 fork 子进程跑
+  `cnip_apply`，ctl 立即回 `OK 已安排 CNIP 重灌`。**不再主线程同步重灌**（~6.5 万条 LPM
+  写入数秒，会阻塞 poll 主循环）。成功与否看 splitd.log / status 的 cnip4/6 计数。
+  忙标志在 fork 前置 1、fork 失败/waitpid 回收后清 0。`reload` 不写 CNIP map
+  （只重放 rule/uid 与接口），无需此闸。
+  **v1.2.0（H2）显式化不变式**：CNIP map 的写入方只有 fork 子进程一个（定时/补拉/
+  update-cnip/reload-cnip 四触发源共用），`g_cnip_busy` 保证互斥；若未来给 `reload`
+  增加 CNIP 重灌，必须同步加 `g_cnip_busy` 检查，否则破坏该单写方不变式。
+- **`update-cnip`（v1.4.1，手动更新 CNIP）**：触发一次与定时自动更新相同的
+  "下载 url_v4/v6 → 原子落盘 → 全量重灌"（`cnip_auto_update`），**不阻塞主线程**——
+  ctl 分支校验（`g_cnip_busy` 忙拒绝 / 无 url 拒绝）后只置 `g_cnip_req=CNIP_REQ_UPDATE` +
+  把 `cnip_next_ms` 提前到 now，主循环下一轮 poll 迭代走 fork 子进程路径（fire 后清
+  `g_cnip_req`）。**手动更新失败不自动重试**（与 boot_once"成功才清零、失败 5 分钟
+  再试"不同——用户可再点）；cnip_next_ms 在成功分支被重设为"now+hours"，hours=0 时因
+  条件 `hours>0||boot_once||g_cnip_req!=NONE` 全 false 不会重复 fire。改调度条件时四个
+  触发源（定时/补拉/update-cnip/reload-cnip）必须一起维护。
 - **`status`（v1.1.3 扩展 / v1.2.7 补 tun 缺失 WARN / v1.2.8 hijack 改缓存）**：`OK prog_fd=<n> attached=<n> tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>`；
   随后可能跟 `WARN ...` 行（CNIP 0 条未导入 / 路由被 mihomo auto-route 接管 / **tun 缺失
   （map_tun=0，v1.2.7 审查 H2：代理流量被放行直连的静默降级要可见）**）——机器可解析，
@@ -195,7 +207,7 @@
 - 语义是"重读配置里 path_v4/path_v6 指向的本地文件"；文件由用户侧定时更新（如 cron + fetch-cnip.sh）。不内置网络下载。
 - `cnip_apply` 内部已"先清 map 再全量"，重复调用安全（见 cni/MEMORY.md）。
 - 注意：fork 子进程继承 ctx 的 map fd，可直接灌入；子进程里不要调用会阻塞主循环的东西（它只跑 cnip_auto_update 就 `_exit`）。
-- **子进程 fd 清理**：子进程 fork 后立即关闭与更新无关的父进程 fd（ctl listen `lfd` / netlink watch `evfd` / 单实例锁 `lock_fd`），避免它们被 curl（v1.2.8 起 `cnip_load_url` 内层 `fork+execlp` 派生的 curl）继承泄漏、也避免与父进程 poll fd 语义纠缠；map fd 保留供灌入。
+- **子进程 fd 清理**：子进程 fork 后立即关闭与更新无关的父进程 fd（ctl listen `lfd` / netlink watch `evfd` / 单实例锁 `lock_fd`），避免它们被下载器（v1.2.8 起 `cnip_load_url` 内层 `fork+exec` 派生的 curl/wget，v1.4.1 起支持回落）继承泄漏、也避免与父进程 poll fd 语义纠缠；map fd 保留供灌入。
 
 ## 路由接管检测（v1.1.3，防"分流失效静默无报错"）
 - **背景（真机教训）**：mihomo 配置若是 box 原样（auto-route:true），mihomo 会在 tun 挂

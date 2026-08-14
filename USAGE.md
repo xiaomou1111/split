@@ -1,6 +1,6 @@
 ﻿# eBPF-Split 使用说明书
 
-> 版本 v1.4.0 ｜ 面向：想在 Linux / Android 真机上用起来的人
+> 版本 v1.4.1 ｜ 面向：想在 Linux / Android 真机上用起来的人
 > 目标读者：能看懂 shell 命令、会 root 的普通用户。代码细节见 `docs/`。
 
 ---
@@ -225,7 +225,8 @@ splitctl status                      # 状态（prog_fd/attached/tun/cnip4/cnip6
 splitctl stats                       # 内核计数
 splitctl list-rules                  # 当前在线规则（proxy/direct 行，v1.2.2）
 splitctl reload                      # 重载配置（增量写 map）
-splitctl reload-cnip                 # 只刷新 CNIP
+splitctl reload-cnip                 # 只刷新 CNIP（重读本地文件重灌）
+splitctl update-cnip                 # 手动更新 CNIP（重新下载 url_v4/v6 后重灌，后台执行）
 splitctl add-rule <cidr> [direct|proxy]   # 在线加规则
 splitctl del-rule <cidr> [direct|proxy]   # 在线删规则
 splitctl validate -c cfg             # 只校验配置

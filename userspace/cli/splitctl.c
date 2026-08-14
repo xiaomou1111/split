@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0
  * splitctl.c — 命令行控制工具
  *
- * 与 splitd 通过 unix socket 通信（status/stats/reload/reload-cnip/stop），
+ * 与 splitd 通过 unix socket 通信（status/stats/reload/reload-cnip/update-cnip/stop），
  * 或直接派生 splitd（start/stop 由 daemon socket 的 stop 完成）。
  */
 #include <stdio.h>
@@ -222,7 +222,8 @@ static void usage(const char *prog)
         "  stats                       内核计数\n"
         "  list-rules                  当前在线规则（proxy/direct，v1.2.2）\n"
         "  reload                      重读配置并应用\n"
-        "  reload-cnip                 只刷新 CNIP\n"
+        "  reload-cnip                 只刷新 CNIP（重读本地文件重灌）\n"
+        "  update-cnip                 手动更新 CNIP（下载 url_v4/v6 后重灌）\n"
         "  add-rule  <cidr> [direct|proxy]\n"
         "  del-rule  <cidr> [direct|proxy]\n"
         "  validate -c cfg             仅校验配置\n", prog);
@@ -286,6 +287,8 @@ int main(int argc, char **argv)
         return send_cmd("reload");
     if (strcmp(argv[optind], "reload-cnip") == 0)
         return send_cmd("reload-cnip");
+    if (strcmp(argv[optind], "update-cnip") == 0)
+        return send_cmd("update-cnip");
     if (strcmp(argv[optind], "add-rule") == 0) {
         if (optind + 1 >= argc) {
             fprintf(stderr, "add-rule <cidr> [proxy|direct]\n");
