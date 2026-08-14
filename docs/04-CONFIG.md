@@ -49,7 +49,7 @@ rules:
   proxy_cidr6:
     - fdfe:dcba:9876::/64      # 对应 mihomo fake-ip-range6
 
-  # 强制直连（内网私有网段等；内置已含 rfc1918/链路本地，见 §6）
+  # 强制直连（内网私有网段等；rfc1918/链路本地默认以规则注入（config_defaults），声明本列表会清空默认段、需连默认段一并列出；硬编码内置段见 §6）
   # direct_cidr4:
   #   - 10.0.0.0/8
   # direct_cidr6:

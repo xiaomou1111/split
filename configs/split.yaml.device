@@ -33,7 +33,7 @@ rules:
   proxy_cidr6:
     - fdfe:dcba:9876::/64
 
-  # 强制直连（内网/自有网段等；内置已含 rfc1918/链路本地/回环）
+  # 强制直连（内网/自有网段等；默认规则已含 rfc1918/链路本地/CGNAT，声明本列表会清空默认段，需连默认段一并列出）
   # direct_cidr4:
   #   - 10.0.0.0/8
   # direct_cidr6:
@@ -50,9 +50,13 @@ rules:
 # Android 上可直接复用 box 模块的 cn.zone：cp /data/adb/box/run/cn.zone config/cn_cidr_v4.txt
 cnip:
   path_v4: /data/adb/split/config/cn_cidr_v4.txt
-  path_v6: /data/adb/split/config/all_cn_ipv6.txt
-  # 自动更新：daemon 每 auto_update_hours 用 curl 下载 url_v4/v6 覆盖到 path_v4/v6 后重灌 map。
+  path_v6: /data/adb/split/config/cn_cidr_v6.txt
+  # 自动更新：daemon 每 auto_update_hours 用下载器下载 url_v4/v6 覆盖到 path_v4/v6 后重灌 map。
   # url 留空 = 只按间隔重读本地文件（不会联网）。0=关闭自动更新。
-  url_v4: https://github.com/17mon/china_ip_list/blob/master/china_ip_list.txt
-  url_v6: https://ispip.clang.cn/all_cn_ipv6.txt
+  # 多源 fallback（v1.4.2）：url 支持逗号分隔多个候选，按序尝试、任一成功即用。
+  #   jsDelivr 大陆可达优先，raw.githubusercontent 全球更稳兜底。
+  # 权威源（v1.4.3）：mihomo 生态默认 GeoIP 源 Loyalsoldier/geoip，cn.txt 每日更新。
+  #   cn.txt 是 v4+v6 混合文件（实测 v4=4145 / v6=1235 条），v4/v6 指向同一份，加载时按族过滤。
+  url_v4: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt
+  url_v6: https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/text/cn.txt,https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt
   auto_update_hours: 24   # 1 天

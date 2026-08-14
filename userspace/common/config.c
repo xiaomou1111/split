@@ -64,7 +64,8 @@ static void str_trim_tail(char *s)
 }
 
 /* YAML 布尔解析：true/false/yes/no/on/off/1/0（大小写不敏感）。
- * 输入先清首尾空白再比对（容忍 "TRUE " 之类的尾空白，v1.1.9 加固）。 */
+ * 输入先清首尾空白再比对（容忍 "TRUE " 之类的尾空白，v1.1.9 加固）。
+ * v1.4.6（审查）：无法识别的串返回 -1（调用方告警并按 false），不再静默吞错。 */
 static int parse_bool(const char *s)
 {
     char buf[16];
@@ -81,7 +82,23 @@ static int parse_bool(const char *s)
     if (strcasecmp(buf + i, "true") == 0 || strcasecmp(buf + i, "yes") == 0 ||
         strcasecmp(buf + i, "on") == 0 || strcmp(buf + i, "1") == 0)
         return 1;
-    return 0;
+    if (strcasecmp(buf + i, "false") == 0 || strcasecmp(buf + i, "no") == 0 ||
+        strcasecmp(buf + i, "off") == 0 || strcmp(buf + i, "0") == 0)
+        return 0;
+    return -1; /* 无法识别：调用方 WARN 并按 false 处理 */
+}
+
+/* 布尔值解析 + 非法值告警（v1.4.6 审查，与 verdict 白名单校验一致）。
+ * 返回 0/1；无法识别时 WARN 并按 false 处理，不再静默。 */
+static int parse_bool_checked(const char *what, const char *v)
+{
+    int b = parse_bool(v);
+
+    if (b < 0) {
+        LOG_WARNF("配置 %s 非法布尔值: %s（已按 false 处理）", what, v);
+        b = 0;
+    }
+    return b;
 }
 
 /* section 上下文 */
@@ -154,7 +171,7 @@ static int handle_scalar(struct split_config *cfg, int section,
             return 1;
         }
         if (strcmp(key, "ipv6") == 0) {
-            cfg->ipv6_classify = parse_bool(v);
+            cfg->ipv6_classify = parse_bool_checked("default.ipv6", v);
             return 1;
         }
     }
@@ -234,9 +251,9 @@ int config_load(const char *path, struct split_config *cfg)
             *sp = '\0';
             char *v = sp + 1; while (*v && isspace(*v)) v++;
             str_trim_tail(v);
-            if (strcmp(p, "debug") == 0) cfg->debug = parse_bool(v);
+            if (strcmp(p, "debug") == 0) cfg->debug = parse_bool_checked("debug", v);
             else if (strcmp(p, "tun_device") == 0) snprintf(cfg->tun_device, CFG_STRLEN, "%s", v);
-            else if (strcmp(p, "attach_auto") == 0) cfg->attach_auto = parse_bool(v);
+            else if (strcmp(p, "attach_auto") == 0) cfg->attach_auto = parse_bool_checked("attach_auto", v);
             else LOG_WARNF("未知顶层配置 key: %s", p);
             continue;
         }
@@ -281,7 +298,7 @@ int config_load(const char *path, struct split_config *cfg)
             str_trim_tail(v);
 
             if (section == S_IFACES) {
-                if (strcmp(p, "attach_auto") == 0) { cfg->attach_auto = parse_bool(v); cur_list = 0; }
+                if (strcmp(p, "attach_auto") == 0) { cfg->attach_auto = parse_bool_checked("ifaces.attach_auto", v); cur_list = 0; }
                 else if (strcmp(p, "attach_list") == 0) { cur_list = 1; list_key_inline_warn(p, v); }
                 else if (strcmp(p, "exclude") == 0) { cur_list = 2; list_key_inline_warn(p, v); }
                 else { LOG_WARNF("ifaces 下未知配置 key: %s", p); cur_list = 0; }
@@ -346,6 +363,17 @@ int config_load(const char *path, struct split_config *cfg)
         LOG_WARNF("rules: 声明了 direct_cidr4 但无列表项，默认内网直连段（10/8 等）已被清空");
     if (declared_direct6 && cfg->ndirect6 == 0)
         LOG_WARNF("rules: 声明了 direct_cidr6 但无列表项，默认 v6 直连段（fe80::/10 等）已被清空");
+    /* v1.4.6（审查）：非空覆盖同样告警——声明 direct_cidr4/6 会连默认内网/链路/CGNAT 段一起
+     * 清空（config_defaults 种下的 10/8、172.16/12、192.168/16、169.254/16、100.64/10 与
+     * fe80::/10、fc00::/7、::1/128）。用户"只加一条"时其余私网段静默丢失 → 落到默认代理，
+     * 与配置注释"默认已含 rfc1918"相悖。纯诊断，不改行为。 */
+    if (declared_direct4 && cfg->ndirect4 > 0)
+        LOG_WARNF("rules: 已声明 direct_cidr4（%d 条），默认内网直连段（10/8、172.16/12、"
+                  "192.168/16、169.254/16、100.64/10）已被清空——如需保留请连同默认段写入",
+                  cfg->ndirect4);
+    if (declared_direct6 && cfg->ndirect6 > 0)
+        LOG_WARNF("rules: 已声明 direct_cidr6（%d 条），默认 v6 直连段（fe80::/10、fc00::/7、"
+                  "::1/128）已被清空——如需保留请连同默认段写入", cfg->ndirect6);
 
     /* v1.4.1（功能冲突审查）：跨字段静默失效告警——配置项叠加时一方被另一方静默吞掉
      * （行为无提示），显式 WARN 防"以为生效"：
