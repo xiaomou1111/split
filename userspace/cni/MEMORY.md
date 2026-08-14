@@ -4,7 +4,7 @@
 
 ## 接口契约
 - `cnip_load_file(ctx, path, family)`：本地文本 → 灌 map。family = AF_INET / AF_INET6。
-- `cnip_load_url(ctx, url, tmp_path, family)`：下载后转交 cnip_load_file。
+- `cnip_load_url(ctx, url, tmp_path, family)`：**v1.4.2 起 url 支持逗号分隔多候选按序尝试**（见第 7 条），下载成功后转交 cnip_load_file。
 - `cnip_apply(ctx, cfg)`：按 cfg.cnip4_path/cnip6_path 全量（两族），任一失败 return -1。
 - `cnip_auto_update(ctx, cfg)`：有 `url_v4/v6` 时下载到 `<path>.tmp` 再原子 rename 到 `path_v4/v6`，成功后 `cnip_apply`；全失败 return -1，未配 url return 0。**依赖 curl/wget/busybox**（下载器回落见第 3 条）。
 
@@ -50,6 +50,13 @@
    是"全量清空重灌"，会按本地旧文件重写（沿用旧数据），已对失败族显式 `LOG_WARNF` 点明。
 6. map 容量 65536：CNIP 全量约 3900 条 v4（chnroutes2 聚合，2026-08 起默认源）+ 约 1200 条
    v6（gaoyifan），余量足。若未来换非聚合源或加全量 v6 需留意不超过 65536。
+7. **多源 fallback（v1.4.2）**：`cnip_load_url` 的 url 支持逗号分隔多个候选（默认
+   "jsDelivr,raw.githubusercontent"），`cnip_try_url()` 逐个 fork+exec 尝试，任一成功即用；
+   全部失败 return -1（调用方沿用本地旧文件）。下载器（tool/is_curl）在循环外探测一次，
+   候选间不重复探测；单引号拒绝检查移至每候选。**配套 CFG_STRLEN 128→256（config.h）**：
+   双 URL 逗号拼接实测 v4=143/v6=155 字符，128 会截断（WSL 用旧二进制 validate 可复现截断）；
+   纯用户态配置缓冲，无 ABI/持久化影响。默认源顺序 = jsDelivr（大陆实测可达）优先 + raw
+   兜底，与 scripts/fetch-cnip.sh 的候选数组一致（别单边改）。
 
 ## 验证
 - fetch-cnip 下载后 daemon 启动/`reload-cnip`；统计 `direct_cn` 增长即为生效。

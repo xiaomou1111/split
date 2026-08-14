@@ -15,7 +15,9 @@
 
 #include <stdint.h>
 
-#define CFG_STRLEN 128
+/* v1.4.2：128→256——CNIP url 多源 fallback 后默认 url 是"jsDelivr,raw"逗号拼接
+ * 双 URL（实测 v4=143/v6=155 字符），128 会截断。纯用户态配置缓冲，无 ABI/持久化影响。 */
+#define CFG_STRLEN 256
 #define CFG_LIST_MAX 16
 
 struct split_config {

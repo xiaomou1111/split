@@ -94,7 +94,21 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.1（当前）        CNIP 更新失败修复 + update-cnip 手动更新（统一后台调度）：
+v1.4.2（当前）        CNIP 数据源多源 fallback（2026-08 源批次 + 双源兜底）：
+                      ①**CNIP v4 默认源更换**：17mon/china_ip_list（每季度更新、非聚合
+                        ~8.7k 条、CC-BY-NC-SA 许可）→ misakaio/chnroutes2（每日 APNIC
+                        路由 dump、聚合约 3900 条、省近半 map 内存）；v6 保留
+                        gaoyifan/china-operator-ip（每日，实测未归档）
+                      ②**多源 fallback**：cnip url 支持逗号分隔多候选按序尝试——cnip_load_url
+                        拆分出 cnip_try_url 单源尝试 + 循环，下载器探测一次、候选间不重复；
+                        任一成功即用、全部失败 return -1 沿用本地旧文件（不归零）；默认
+                        jsDelivr 优先（大陆实测可达，本机 raw.githubusercontent 被屏蔽）
+                        + raw 兜底（全球更稳），互为备份
+                      ③**CFG_STRLEN 128→256**：双 URL 逗号拼接 v4=143/v6=155 字符，128 会
+                        截断（WSL 用旧二进制 validate 可复现截断）；纯用户态配置缓冲，
+                        无 ABI/持久化影响；fetch-cnip.sh 同步 dl_candidates 多源 fallback
+                      ④文档 / 各 MEMORY 全量同步；版本号 1.4.2（bump-version.sh）
+v1.4.1        CNIP 更新失败修复 + update-cnip 手动更新（统一后台调度）：
                       ①**CNIP 更新失败修复**（根因 3 个，见 cni/MEMORY）：
                         a. 下载器回落：Android Magisk 常无 curl，旧实现绝对路径探测全空 →
                           exec 失败 exit 127 → 每 5 分钟死循环重试。现补齐 wget/busybox 探测

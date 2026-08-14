@@ -156,27 +156,18 @@ static const char *cnip_find_downloader(int *is_curl)
     return NULL;
 }
 
-int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
-                  const char *tmp_path, int family)
+/* 单源尝试：fork+exec 下载 url 到 tmp_path 并解析校验（ok>0 才认成功）。
+ * 供 cnip_load_url 的多源 fallback 逐个调用；下载器（tool/is_curl）由调用方
+ * 在循环外探测一次（候选源之间下载器不变）。返回 0 成功 / -1 失败。 */
+static int cnip_try_url(struct split_bpf_ctx *ctx, const char *url,
+                        const char *tmp_path, int family,
+                        const char *tool, int is_curl)
 {
     pid_t pid;
     int st = 0;
-    int is_curl = 1;
-    const char *tool;
 
     if (strchr(url, '\'') || strchr(tmp_path, '\'')) {
         LOG_ERRORF("拒绝含单引号的 URL: %s", url);
-        return -1;
-    }
-    /* v1.2.8（审查修复）：弃用 system()（shell 拼接注入面），改 fork + exec 直接跑
-     * 下载器——参数原样传给 execve，无 shell 解释，URL 中任何元字符（`;` `$()` 反引号等）
-     * 都只是普通参数。exec 优先绝对路径（2026-08 审查批次），消除对可写 PATH 的依赖。
-     * v1.4.1（CNIP 更新失败修复）：Android Magisk 环境通常没有 curl，探测回落
-     * wget/busybox wget；全部缺失由 cnip_find_downloader 返回 NULL，此处明确报错。 */
-    tool = cnip_find_downloader(&is_curl);
-    if (!tool) {
-        LOG_ERRORF("未找到 curl/wget/busybox，无法自动更新 CNIP"
-                   "（请安装其一，或放置本地 CNIP 文件后 reload-cnip）");
         return -1;
     }
     pid = fork();
@@ -246,6 +237,55 @@ int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
         }
     }
     return 0;
+}
+
+int cnip_load_url(struct split_bpf_ctx *ctx, const char *url,
+                  const char *tmp_path, int family)
+{
+    char buf[CFG_STRLEN];
+    char *p;
+    int is_curl = 1;
+    const char *tool;
+
+    /* v1.2.8（审查修复）：弃用 system()（shell 拼接注入面），改 fork + exec 直接跑
+     * 下载器——参数原样传给 execve，无 shell 解释，URL 中任何元字符（`;` `$()` 反引号等）
+     * 都只是普通参数。exec 优先绝对路径（2026-08 审查批次），消除对可写 PATH 的依赖。
+     * v1.4.1（CNIP 更新失败修复）：Android Magisk 环境通常没有 curl，探测回落
+     * wget/busybox wget；全部缺失由 cnip_find_downloader 返回 NULL，此处明确报错。 */
+    tool = cnip_find_downloader(&is_curl);
+    if (!tool) {
+        LOG_ERRORF("未找到 curl/wget/busybox，无法自动更新 CNIP"
+                   "（请安装其一，或放置本地 CNIP 文件后 reload-cnip）");
+        return -1;
+    }
+
+    /* 多源 fallback（v1.4.2）：url 支持逗号分隔多个候选，按序尝试、任一成功即用。
+     * 默认 jsDelivr（大陆可达）优先、raw.githubusercontent（全球更稳）兜底，互为备份；
+     * 全部失败返回 -1（沿用本地旧文件，见 cnip_fetch_to_path 调用方）。逗号做分隔符，
+     * URL 内如需字面逗号请用 %2C（CNIP 源为简单路径，实际不会出现）。 */
+    snprintf(buf, sizeof(buf), "%s", url);
+    p = buf;
+    while (p && *p) {
+        char *comma = strchr(p, ',');
+        char *cand;
+        size_t n;
+
+        if (comma)
+            *comma = '\0';
+        cand = p;
+        while (*cand == ' ' || *cand == '\t')
+            cand++;
+        n = strlen(cand);
+        while (n > 0 && (cand[n - 1] == ' ' || cand[n - 1] == '\t'))
+            cand[--n] = '\0';
+        if (cand[0]) {
+            if (cnip_try_url(ctx, cand, tmp_path, family, tool, is_curl) == 0)
+                return 0;
+            LOG_WARNF("CNIP 源不可用，尝试下一候选: %s", cand);
+        }
+        p = comma ? comma + 1 : NULL;
+    }
+    return -1;
 }
 
 int cnip_apply(struct split_bpf_ctx *ctx, const struct split_config *cfg)
