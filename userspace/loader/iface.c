@@ -48,6 +48,37 @@ int iface_plan(struct split_bpf_ctx *ctx, const struct split_config *cfg,
         list = &owned;
     }
 
+    /* 审查（2026-08）：attach_auto=0 时 attach_list 里"设备上不存在"或"非物理网卡"
+     * 的名字此前静默跳过——用户拼错接口名（wlan1 vs 实际 wlan0）会静默不挂、
+     * 流量全走默认直连，无任何提示。每个类别告警一次到进程级（iface_plan 每
+     * 5~15s 心跳都会跑，不去重会刷屏；daemon reload 沿用同一 cfg 结构故不重复）。
+     * 仅诊断提示，不改变挂载行为。 */
+    if (!cfg->attach_auto && cfg->nattach > 0) {
+        static int s_warned_notfound = 0, s_warned_nonphys = 0;
+
+        for (int m = 0; m < cfg->nattach && !(s_warned_notfound && s_warned_nonphys); m++) {
+            const char *name = cfg->attach_list[m];
+            int found = 0;
+
+            if (!name[0])
+                continue;
+            for (int k = 0; k < list->count; k++) {
+                if (strcmp(list->items[k].name, name) == 0) {
+                    found = 1;
+                    if (!iface_is_physical(&list->items[k]) && !s_warned_nonphys) {
+                        LOG_WARNF("attach_list 项 %s 非物理网卡，已忽略（只挂物理网卡）", name);
+                        s_warned_nonphys = 1;
+                    }
+                    break;
+                }
+            }
+            if (!found && !s_warned_notfound) {
+                LOG_WARNF("attach_list 项 %s 在当前设备接口列表中不存在，已忽略（请检查接口名）", name);
+                s_warned_notfound = 1;
+            }
+        }
+    }
+
     for (int k = 0; k < list->count && n < max; k++) {
         const struct iface *i = &list->items[k];
         int want;

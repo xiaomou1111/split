@@ -23,6 +23,10 @@
 5. **`-mcpu=v1` 必须保留（Android 兼容关键，v1.0.2 实测发现）**：新 clang 默认编出 `BPF_ATOMIC`（`atomic_fetch_add`，opcode `0xdb`），但小米 5.10/5.15 GKI 的 verifier 只认老 `BPF_XADD`，报 `BPF_STX uses reserved fields` 拒载。**kernel/Makefile 必须 `-mcpu=v1`**（生成 `BPF_XADD`），否则真机加载失败。WSL2(6.18) 能过但真机 5.x 过不了——这就是"宿主能跑真机不能"的经典差异。
 6. **map 单一真相源在 maps.h**：改 map 类型/容量/大小必须同步 `userspace/loader/loader.c` 的 map 期望表与 docs/02 map 表。map 名称（`map_` 前缀）被用户态按名字查找，**改名即破坏契约**。
 7. **stats_inc 用 `key & (STAT_MAX - 1)` 防越界**：`STAT_MAX=16` 必须是 2 的幂。key 编号被 `daemon.c ctl_stats` 的名字数组引用，**不能重排/插入**（可追加）。`STAT_DIRECT_V6=9`（v6 且 `ipv6_classify=false` 的"配置性直连"，与 CNIP 直连 `STAT_DIRECT_CN=1` 分开计，见 policy.h 第 2 步；v1.4.0 随域名统计删除后自 11 重排为 9——**仅运行时统计 map，无持久 ABI，重排安全**）——**追加 key 必须同步 daemon.c names 数组**。
+   **审查（2026-08）澄清 STAT_DIRECT_RULE 语义**：该计数是"直连判定"类——内置本地段（第 3 步）、
+   直连规则（第 5 步）、default=direct（第 7 步）**三路径共用**，CNIP 单列 STAT_DIRECT_CN；
+   STAT_PROXY 同理含"默认代理"路径。app.js 标签已从"直连·规则"改为"直连·规则/默认"。若真要
+   按路径拆分需追加 key（尾部追加安全）+ daemon names + app.js + docs，属产品决策暂缓。
 8. **LPM_TRIE 语义**：radix.h 查询时 prefixlen 填 128/32（查最具体），内核自动最长前缀回溯；key 必须整体清零（`{ .prefixlen = 32 }` 其余零）。值统一 `__u8 =1`（成员标记，不承载意义）。
 9. **parse 边界（v1.4.0 起仅 L3）**：VLAN 支持至双标签 QinQ（`VLAN_MAX_TAGS=2`，0x8100/0x88a8，
    常量上界 + 全展开保证 verifier 可证）；rawip 蜂窝无 L2 路径（见 20）。parse 只提取
@@ -62,6 +66,10 @@
     - 这即"补齐网络栈上下文"的确切含义——tun 设备需要的 queue_mapping 上下文。
     - **历史**：v1.0.3 曾误判"mihomo 无法接受 bpf_redirect 注入"，实为缺 queue_mapping。
       BPF_F_INGRESS 不可用（包不进 tun 读队列），必须 flags=0(egress) + queue_mapping=0。
+    - **审查（2026-08）澄清"bpf_redirect 死检查"**：`split.bpf.c` 对 `bpf_redirect(tun,0) !=
+      TC_ACT_REDIRECT` 的检查**不是死代码**——helper 在 ifindex 无效（tun 恰在查表后被删）时
+      返回 `TC_ACT_SHOT(-1)`，失败路径可达；返回 `TC_ACT_OK` 放行保联网也如实兑现"绝不丢包"
+      （split.bpf.c:74-78）。勿"优化"掉该分支。
 13. **mihomo gso 与 eBPF redirect 不兼容（v1.0.4 实测）**：mihomo `gso:true` 使 tun 用
     `IFF_VNET_HDR`（flags 0x5001 = IFF_TUN|IFF_NO_PI|IFF_VNET_HDR；**无** IFF_MULTI_QUEUE，
     Alpha 源码核实 sing-tun `tun_linux.go` `open(name, vnetHdr)`，vnetHdr=options.GSO），

@@ -33,8 +33,6 @@ VERSION=$(grep -oP 'SPLIT_VERSION\s+"[^"]+"' "$ROOT/kernel/include/split_bpf.h" 
 echo "版本: v$VERSION"
 
 OUT="$ROOT/build/split-magisk-v$VERSION.zip"
-# 清理旧版本 zip（保留当前要生成的，含 ksu 别名）
-rm -f "$ROOT"/build/split-magisk-v*.zip "$ROOT"/build/split-ksu-v*.zip
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -112,6 +110,10 @@ done
 sed -i "s|^SPLIT_VERSION=\"@SPLIT_VERSION@\"\$|SPLIT_VERSION=\"$VERSION\"|" \
   "$STAGE/scripts/webuiapi.sh" 2>/dev/null || true
 
+# 清理旧版本 zip（保留当前要生成的，含 ksu 别名）——必须在全部校验通过后
+# （审查 2026-08）：原先在脚本开头删，二进制/BPF 缺失导致 set -e 退出时
+# 会把上一版好包也删掉；移到打包前，失败留上一版可回退。
+rm -f "$ROOT"/build/split-magisk-v*.zip "$ROOT"/build/split-ksu-v*.zip
 mkdir -p "$(dirname "$OUT")" && rm -f "$OUT"
 (cd "$STAGE" && zip -rq "$OUT" .)
 

@@ -175,6 +175,12 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 - **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/**update-cnip（v1.4.1）**/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
   行数 n 走整型白名单（非纯数字回退 200），`tail` → `busybox tail` → `cat` 兜底；日志尾按行截断避免打爆 WebView。
   action 由 case 分支映射，**不透传任意 shell **；参数经 shell 引号包裹（单引号 CIDR）防注入。
+- **动作 case 缺参/失败区分（审查 2026-08）**：`get-config/save-config/validate-config/get-log` 原用
+  `[ -n "$2" ] && cmd || { echo "ERR: 缺参"; exit 1; }` 链——命令**真实失败**（磁盘/落盘错误等）时
+  `||` 分支照样触发、误报"缺参"。已改 if/else：仅真缺参才打缺参提示，真实失败透传命令自身退出码。
+- **stats 标签纠偏（审查 2026-08）**：`direct_rule` 实为"直连判定"类计数（内置本地∪直连规则∪
+  默认直连三路径共用，CNIP 单列 `direct_cn`），app.js 标签 `'直连·规则'` → `'直连·规则/默认'`，
+  避免排查时误以为"只有直连规则在命中"（policy.h 第 3/5/7 步同计数）。
 - **env 动作（WebUI 完善）**：环境信息 `key=value` 行——kernel/arch（uname）、android/sdk/device（getprop）、
   selinux（getenforce）、uptime（/proc/uptime，格式 hNm）、splitd_pid（`pgrep -f "$SPLITD"` 全路径匹配，
   webuiapi.sh 自身命令行不含该路径不自匹配）、watchdog（1/0，split-watchdog.sh 是否存活）。

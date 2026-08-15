@@ -7,6 +7,9 @@
 - `split_socket_path()`：返回控制 socket 路径；优先 `$SPLIT_SOCKET` 环境变量，默认 `/run/splitd.sock`。
 - **背景**：Android 没有 `/run` 目录（只读根），splitd 的 ctl socket bind 失败但核心 BPF 正常。真机需 `export SPLIT_SOCKET=/data/adb/split/run/splitd.sock`（分层目录 run/ 下）。
 - 被 daemon（bind/unlink）与 cli（connect）共用，改路径逻辑必须两处同步。
+- **审查（2026-08）注释纠偏**：`paths.h` 原注释"返回值指向静态缓冲区，每次调用可能不同"失实——
+  实为 `getenv` 返回的环境字符串或编译期字面量（paths.c 无静态缓冲）。已改为准确描述：
+  不得 free、本程序不改环境变量故指针进程期稳定。
 
 ## config — 极简 YAML 子集解析器
 - 支持语法仅：`#` 注释、`section:`、`key: value`、`- list-item`。**无缩进语义、无引号、无嵌套、无多行**。
@@ -131,6 +134,13 @@
    **v1.2.7（审查 M2）**：`tables[]` 容量 16→64；default-via-tun 私有表 id 集合写满时
    无法完整校验"全部流量是否被导进某表"——按检测失败返回 -1（daemon 跳过本轮、status
    显示 -1），避免漏报接管（假阴性）。此前超 16 张被静默忽略。
+   **iface_scan 本身遇 `NLMSG_ERROR`/畸形消息（审查 2026-08 补齐）**：此前 iface_scan 只认
+   `NLMSG_DONE`/`RTM_NEWLINK`，`NLMSG_ERROR` 被静默跳过——内核报错后照发 DONE 时得到
+   "0 接口"的部分成功，reconcile 会据此把全部 tc filter 卸载（路由全失）；畸形/截断消息
+   `goto done` 返部分成功（接口集合不全同样静默卸载）。现与 rule_dump 口径统一：
+   `NLMSG_ERROR` → `LOG_ERRORF` + `return -1`；畸形/截断 → `LOG_WARNF` + `return -1`
+   （调用方保持原状态，不误清）。注意此前多处注释写"与 iface_scan 口径统一"实为
+   **未落实**——iface_scan 才是最后补上的那个。
    **v1.2.3（真机修复，WSL 内核实测）三个子 bug，全部命中"hijack 误判/漏判"**：
   1. **payload 残值**：第一趟 RTA_OIF 的遍历用 `RTA_NEXT` 会把 `payload` 递减到 0，再把残值
      传给 `default_route_table` → RTA_OK 立即 false → **读不到 RTA_TABLE，非 main 表的
@@ -154,6 +164,9 @@
 - 坑 7（v1.1.4）：**`config_load` 先 fopen 再 `config_defaults`**——此前 defaults 在 fopen 前执行，
   文件打不开时调用方 cfg 已被重置成默认值，daemon reload 的"失败沿用内存配置"实际变成
   "重放默认规则"（自定义 proxy/direct/skip_uid 全丢）。修复后打开失败 cfg 保持原样。
+  **审查（2026-08）补充：目录路径同样会"成功打开"**——Linux 上 `fopen(dir,"r")` 成功，首个
+  `fgets` 才 EISDIR 失败、解析循环不跑，函数返 0 且 cfg 被重置默认（同一静默重置）。现 fopen 后
+  补 `fstat + S_ISDIR`（`sys/stat.h`）显式拒绝目录，走统一失败路径（reload 沿用内存配置）。
 - `IFACE_MAX=128` 是 loader `attached[]` 的容量约定，改此处必须同步 `loader.h` 的依赖（loader.h include 本头获得 IFACE_MAX）。
 - 仅在 start-split/daemon 用到 `iface_index_by_name`（tun 解析）。
 

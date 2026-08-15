@@ -131,6 +131,10 @@
     确认真正是物理网卡——此前只比对名字 + exclude，用户若把 `utun0`/`tun0` 写进
     `attach_list` 会把虚拟/tun 接口挂载上去（回环 + parse_err）。与 `attach_auto=1`
     分支口径一致；`iface_is_physical` 内建 IFF_UP 与 lo/tun/utun/rmnet_ipa 等排除。
+    **审查（2026-08）补充：未命中项此前完全静默**——拼错接口名（wlan1 vs 实际 wlan0）
+    或显式列出非物理接口都无提示、静默不挂（流量全走默认直连）。现 `iface_plan` 对
+    "设备上不存在"/"非物理网卡"两个类别各告警一次到进程级（每 5~15s 心跳都跑，不去重
+    会刷屏；daemon reload 沿用同一 cfg 结构故不重复）。仅诊断提示，不改变挂载行为。
 
 ## 日志（v1.4.5 补全）
 - `map_by_name`：map 打开失败 `LOG_ERRORF`（名字），成功 `LOG_DEBUGF`（debug:true 下逐 map 核对打开情况）。

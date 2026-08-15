@@ -71,6 +71,22 @@ static int cnip_load_fd(struct split_bpf_ctx *ctx, FILE *fp, int family,
         if (*p == '\0' || *p == '#')
             continue;
 
+        /* 审查（2026-08）：行内 `#` 注释——"1.2.3.4/24 # 说明"这类行此前只剥了整行
+         * 注释（上面的 continue），行内注释会带着 " # 说明" 一路进 snprintf/parse_pfix，
+         * 合法行被计 bad 并丢弃（MEMORY"支持 # 注释"契约只实现了一半）。IPv6 地址不含
+         * #，从首个 # 截断安全；截断后需再去尾随空白（可能紧贴 # 或注释后）。 */
+        {
+            char *hash = strchr(p, '#');
+
+            if (hash)
+                *hash = '\0';
+            n = strlen(p);
+            while (n > 0 && (p[n - 1] == ' ' || p[n - 1] == '\t'))
+                p[--n] = '\0';
+        }
+        if (*p == '\0')
+            continue;
+
         /* v1.4.3（混合源按族加载）：异族行跳过、不计 bad（Loyalsoldier cn.txt 同时含
          * v4+v6，加载 v4 map 时跳过 v6 行）；非法行仍计 bad（ok/bad 语义不变）。
          * v1.4.5：skip 计数仅供 DEBUG 诊断——混合文件按族加载后想确认"该族之外

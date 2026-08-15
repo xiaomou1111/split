@@ -40,6 +40,11 @@
   修复：分隔符改 `#`；连带 native 行守卫 `grep -q '^deb .*archive\.ubuntu\.com'` 漏
   security.ubuntu.com-only 文件（sed 能 pin security 但守卫不放行），扩为
   `grep -qE '^deb .*(archive|security)\.ubuntu\.com'`。
+- **坑（审查 2026-08，legacy 子域镜像漏 pin）**：守卫 grep 的 `.*` 能放行 `cn./us.` 等子域镜像，
+  但 sed 的 `(archive|security)` 紧贴 `//`，`http://cn.archive.ubuntu.com` **匹配不到** → 镜像行
+  漏加 `[arch=amd64]`，fix_legacy"以为修好了"实际 arm64 update 照样 404（deb822 分支 awk 用
+  `.*(archive|security)` 不受影响）。修复：sed 加可选子域前缀 `([a-zA-Z0-9.-]+\.)?`。
+  第三方镜像（tuna 等）不匹配官方域、不误 pin（这类镜像常自带 arm64）。
 - **bpftool（v1.4.5 从 prepare 移除）**：Ubuntu 24.04 无独立候选包（虚拟包），仅 `make -C kernel
   validate/disasm` 可选使用；kernel/Makefile 的 `BPFTOOL ?= bpftool` 保持默认，需要时装
   `linux-tools-common`。勿把 bpftool 加回 prepare 的 apt-get install 清单。
@@ -70,6 +75,8 @@
 - **v1.0.6：二进制/BPF 缺失改为硬性报错退出**（不再打包空 bin/），报错提示先 make userspace / build_arm64.sh。
 - **产物带版本号（v1.0.5）**：VERSION 从 `kernel/include/split_bpf.h` 的 `SPLIT_VERSION` 提取；
   打包前自动清理旧的 `split-magisk-v*.zip`（只保留最新）。
+  **审查（2026-08）时序修正**：旧 zip 清理**必须在全部校验通过后**（移到了打包前、原在脚本开头）——
+  二进制/BPF 缺失时 `set -e` 会在校验处退出，若先删旧包则"失败打包不留上一版可回退"。
 - **版本同源（v1.1.0 解决"两处硬编码"坑）**：打包时用 SPLIT_VERSION 改写 STAGE 内
   module.prop 的 `version`（x.y.z 原样）与 `versionCode`（**v1.2.7 起无碰撞公式
   `major*10000+minor*100+patch`**，如 1.2.9→10209、2.0.0→20000；旧式 `major*100+minor*10+patch`

@@ -96,7 +96,10 @@ fix_legacy() {
     # 审查（2026-08）：分隔符用 #——正则 (archive|security) 含 |，若用 | 作分隔符
     # GNU sed 报 "unknown option to s"（syntax error），set -e 下 fix_legacy 整体中止
     # （旧 http:// 行同样有此 bug，fix_legacy 从未真正工作过）。
-    sed -i -E 's#^deb (https?://(archive|security)\.ubuntu\.com)#deb [arch=amd64] \1#' "$f"
+    # 审查（2026-08）：子域镜像（cn./us./tw. 等 *.archive.ubuntu.com）同样只发布 amd64
+    # ——此前 (archive|security) 紧贴 //，cn.archive.ubuntu.com 匹配不到、漏 pin，而上面的
+    # 守卫 grep 用 .* 放行子域，fix_legacy 会"以为修好了"实际照样 404。加可选子域前缀。
+    sed -i -E 's#^deb (https?://([a-zA-Z0-9.-]+\.)?(archive|security)\.ubuntu\.com)#deb [arch=amd64] \1#' "$f"
     cat >> "$f" <<EOF
 
 # arm64 multiarch（ports 源：archive/security.ubuntu.com 不发布 binary-arm64）

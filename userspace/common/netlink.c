@@ -471,10 +471,28 @@ int iface_scan(struct iface_list *list)
         for (off = 0; (size_t)off + sizeof(struct nlmsghdr) <= (size_t)len; off += NLMSG_ALIGN(nlh->nlmsg_len)) {
             nlh = (struct nlmsghdr *)(buf + off);
             if (nlh->nlmsg_len < sizeof(struct nlmsghdr) ||
-                (size_t)off + NLMSG_ALIGN(nlh->nlmsg_len) > (size_t)len)
-                goto done;
+                (size_t)off + NLMSG_ALIGN(nlh->nlmsg_len) > (size_t)len) {
+                /* 审查（2026-08）：畸形/截断消息此前 goto done 返部分成功——接口集合
+                 * 不全时 reconcile 会把"不在列表里的"接口全卸载（静默丢路由），与
+                 * rule_dump 口径统一：视为失败，调用方保持原状态（不误清）。 */
+                LOG_WARNF("iface 扫描收到畸形/截断的 netlink 消息，丢弃本次结果");
+                close(fd);
+                return -1;
+            }
             if (nlh->nlmsg_type == NLMSG_DONE)
                 goto done;
+            /* 审查（2026-08）：NLMSG_ERROR 此前被静默跳过——内核报错（EPERM/命名空间
+             * 损坏）后照发 DONE 时会得到"0 接口"的部分成功，reconcile 据此把全部
+             * tc filter 卸载（路由全失）。与 rule_dump/route_tun_hijacked 口径统一：
+             * 报错即视为扫描失败。 */
+            if (nlh->nlmsg_type == NLMSG_ERROR) {
+                struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(nlh);
+
+                LOG_ERRORF("iface 扫描 netlink 错误(%s)，视为扫描失败",
+                           strerror(-err->error));
+                close(fd);
+                return -1;
+            }
             if (nlh->nlmsg_type == RTM_NEWLINK) {
                 struct ifinfomsg *ifm = (struct ifinfomsg *)NLMSG_DATA(nlh);
                 int attrs_off;

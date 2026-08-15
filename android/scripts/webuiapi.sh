@@ -253,13 +253,36 @@ case "$ACTION" in
     [ -n "$2" ] || { echo "ERR: 缺 CIDR"; exit 1; }
     run del-rule "$2" "${3:-proxy}" ;;
   get-config)
-    [ -f "$CFG" ] && cat "$CFG" || echo "ERR: 无配置文件 $CFG" ;;
+    if [ -f "$CFG" ]; then
+      cat "$CFG"
+    else
+      echo "ERR: 无配置文件 $CFG"
+    fi
+    ;;
   save-config)
-    [ -n "$2" ] && save_config "$2" 1 || { echo "ERR: 缺 base64 内容"; exit 1; } ;;
+    if [ -n "$2" ]; then
+      save_config "$2" 1
+    else
+      echo "ERR: 缺 base64 内容"
+      exit 1
+    fi
+    ;;
   validate-config)
-    [ -n "$2" ] && save_config "$2" 0 || { echo "ERR: 缺 base64 内容"; exit 1; } ;;
+    if [ -n "$2" ]; then
+      save_config "$2" 0
+    else
+      echo "ERR: 缺 base64 内容"
+      exit 1
+    fi
+    ;;
   get-log)
-    [ -n "$2" ] && get_log "$2" "$3" || { echo "ERR: 缺日志名（splitd|mihomo）"; exit 1; } ;;
+    if [ -n "$2" ]; then
+      get_log "$2" "$3"
+    else
+      echo "ERR: 缺日志名（splitd|mihomo）"
+      exit 1
+    fi
+    ;;
   *) echo "ERR: 未知命令 $1"; exit 1 ;;
 esac
 exit $?

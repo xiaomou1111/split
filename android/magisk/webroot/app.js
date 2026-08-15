@@ -21,7 +21,7 @@ const $ = (id) => document.getElementById(id);
 
 /* 内核统计段的中文标签（与 daemon ctl_stats 的 names[] 对应） */
 const STAT_LABELS = {
-  total: '总包数', direct_cn: '直连·CN', direct_rule: '直连·规则',
+  total: '总包数', direct_cn: '直连·CN', direct_rule: '直连·规则/默认',
   proxy: '代理', skip_uid: '白名单', parse_err: '解析错误',
   redirect_err: '重定向错误', dropped: '丢弃', miss_tun: 'TUN缺失',
   direct_v6: '直连·v6',

@@ -110,7 +110,10 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         return SPLIT_VERDICT_PASS;
     }
 
-    /* 3. 内置本地段 */
+    /* 3. 内置本地段（127/8、链路本地、组播、ff00::/8 等；不含 RFC1918，见
+     * builtin_is_local）。审查（2026-08）澄清：STAT_DIRECT_RULE 是"直连判定"类计数，
+     * 与本步内置本地、第 5 步直连规则、第 7 步 default=direct 共用（CNIP 单列
+     * STAT_DIRECT_CN）——别把它的数值误读成"直连规则命中数"。 */
     if (builtin_is_local(pkt)) {
         stats_inc(STAT_DIRECT_RULE);
         return SPLIT_VERDICT_PASS;
@@ -155,7 +158,8 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         }
     }
 
-    /* 7. 默认行为 */
+    /* 7. 默认行为。STAT_PROXY / STAT_DIRECT_RULE 都含此默认路径（审查 2026-08 澄清：
+     * 与第 4/5 步同计数器，故代理计数含"默认代理"、直连计数含"默认直连"）。 */
     if (cfg->default_verdict == SPLIT_VERDICT_TUN)
         stats_inc(STAT_PROXY);
     else

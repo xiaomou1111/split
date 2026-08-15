@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+#include <sys/stat.h> /* fstat + S_ISDIR（config_load 拒绝目录路径，审查 2026-08） */
 
 #include "log.h"
 
@@ -252,6 +253,19 @@ int config_load(const char *path, struct split_config *cfg)
     if (!fp) {
         LOG_ERRORF("无法打开配置 %s: %s", path, strerror(errno));
         return -1;
+    }
+    /* 审查（2026-08）：fopen 对"目录路径"在 Linux 上同样成功（目录可按读打开），
+     * 随后首个 fgets 报 EISDIR、解析循环不跑——函数返回 0 且 cfg 已被重置为默认值，
+     * 静默绕过 v1.1.4 修的"失败沿用内存配置"语义（目录当配置 = 规则全丢且无提示）。
+     * 显式拒绝目录，走统一失败路径。 */
+    {
+        struct stat st;
+
+        if (fstat(fileno(fp), &st) == 0 && S_ISDIR(st.st_mode)) {
+            LOG_ERRORF("配置路径是目录而非文件: %s", path);
+            fclose(fp);
+            return -1;
+        }
     }
     s_list_full_warned = NULL; /* 列表溢出告警只报一次（见 list_full_warn） */
     config_defaults(cfg);
