@@ -157,16 +157,23 @@ static void set_str_checked(char out[CFG_STRLEN], const char *what, const char *
         LOG_WARNF("配置 %s 值超长（%d>%d）已截断: %.40s…", what, n, CFG_STRLEN - 1, v);
 }
 
-/* 列表溢出告警去重：同一列表首次溢出告警一次（config_load 每次进入前重置），
- * 避免 100 条 proxy_cidr4 刷 80+ 行相同 WARN。 */
+/* 列表溢出告警去重：同一列表"一次声明块"内首次溢出告警一次——config_load 进入前
+ * 重置 + 列表 key 声明处清除（审查补），避免 100 条 proxy_cidr4 刷 80+ 行相同 WARN，
+ * 同时保证规则列表（proxy/direct/skip_uid，声明即重置计数）二次声明后溢出仍会告警——
+ * 只按指针去重会让第二次溢出完全静默（恰违"第 17 条起不生效要有提示"初衷）。 */
 static const void *s_list_full_warned = NULL;
 
 static void list_full_warn(const void *list, const char *what, const char *item)
 {
+    size_t l;
+
     if (s_list_full_warned == list)
         return;
     s_list_full_warned = list;
-    LOG_WARNF("%s 列表已满（上限 %d 项），后续项被忽略: %s", what, CFG_LIST_MAX, item);
+    /* 项可能超长（与 set_str_checked 截断口径一致），全打会刷屏 */
+    l = strlen(item);
+    LOG_WARNF("%s 列表已满（上限 %d 项），后续项被忽略: %.*s%s",
+              what, CFG_LIST_MAX, (int)(l > 40 ? 40 : l), item, l > 40 ? "…" : "");
 }
 
 static void add_str(char list[][CFG_STRLEN], int *n, const char *what, const char *v)
@@ -376,8 +383,8 @@ int config_load(const char *path, struct split_config *cfg)
 
             if (section == S_IFACES) {
                 if (strcmp(p, "attach_auto") == 0) { cfg->attach_auto = parse_bool_checked("ifaces.attach_auto", v); cur_list = 0; }
-                else if (strcmp(p, "attach_list") == 0) { cur_list = 1; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "exclude") == 0) { cur_list = 2; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "attach_list") == 0) { cur_list = 1; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "exclude") == 0) { cur_list = 2; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
                 else { section_unknown_key_warn(S_IFACES, p); cur_list = 0; }
                 continue;
             }
@@ -387,11 +394,11 @@ int config_load(const char *path, struct split_config *cfg)
                 continue;
             }
             if (section == S_RULES) {
-                if (strcmp(p, "proxy_cidr4") == 0)  { cfg->nproxy4  = 0; cur_list = 3; declared_proxy4 = 1; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "proxy_cidr6") == 0)  { cfg->nproxy6  = 0; cur_list = 4; declared_proxy6 = 1; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "direct_cidr4") == 0) { cfg->ndirect4 = 0; cur_list = 5; declared_direct4 = 1; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "direct_cidr6") == 0) { cfg->ndirect6 = 0; cur_list = 6; declared_direct6 = 1; list_key_inline_warn(p, v); }
-                else if (strcmp(p, "skip_uid") == 0)     { cfg->nskip_uid = 0; declared_skip_uid = 1; cur_list = 7; list_key_inline_warn(p, v); }
+                if (strcmp(p, "proxy_cidr4") == 0)  { cfg->nproxy4  = 0; cur_list = 3; declared_proxy4 = 1; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "proxy_cidr6") == 0)  { cfg->nproxy6  = 0; cur_list = 4; declared_proxy6 = 1; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "direct_cidr4") == 0) { cfg->ndirect4 = 0; cur_list = 5; declared_direct4 = 1; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "direct_cidr6") == 0) { cfg->ndirect6 = 0; cur_list = 6; declared_direct6 = 1; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
+                else if (strcmp(p, "skip_uid") == 0)     { cfg->nskip_uid = 0; declared_skip_uid = 1; cur_list = 7; s_list_full_warned = NULL; list_key_inline_warn(p, v); }
                 /* v1.3.1（审查修复）：未知 key 不清 cur_list 会让其后的 "- item" 行
                  * 被并入上一个列表（静默误分流）。未知 key 一律复位当前列表。 */
                 else { section_unknown_key_warn(S_RULES, p); cur_list = 0; }

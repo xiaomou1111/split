@@ -271,6 +271,9 @@
   **v1.2.8（审查修复）**：`waitpid` 失败（如 ECHILD——子进程已被系统回收）时显式清除
   `cnip_pid`/`g_cnip_busy` 并按 fork 失败同语义 1 分钟后再试——旧实现不清会永久卡死：
   定时更新不再触发、`reload-cnip` 被 `g_cnip_busy` 永久拒绝。
+  **审查（2026-08）补**：`EINTR`（waitpid 被信号打断、子进程仍在跑）必须先 `continue`
+  重新 waitpid，不能走上述清理——清 `g_cnip_busy` 破坏 H2 单写方不变式（新一轮 fork 会与
+  仍在灌入的旧子进程并发写 CNIP map），且"子进程已被回收"是误判。
 - 语义是"重读配置里 path_v4/path_v6 指向的本地文件"；文件由用户侧定时更新（如 cron + fetch-cnip.sh）。不内置网络下载。
 - `cnip_apply` 内部已"先清 map 再全量"，重复调用安全（见 cni/MEMORY.md）。
 - 注意：fork 子进程继承 ctx 的 map fd，可直接灌入；子进程里不要调用会阻塞主循环的东西（它只跑 cnip_auto_update 就 `_exit`）。
@@ -300,6 +303,13 @@
   `POLLERR/POLLHUP/POLLNVAL` 而无分支消费，poll 会立即返回 → daemon 100% CPU 忙循环。
   现对两个 fd 的错误位显式处理：ctl listen / netlink watch **重建**（`ctl_listen()` /
   `iface_watch_open()`，内部各自 unlink/bind）。勿把"只查 POLLIN"改回去。
+- **ctl listen / netlink watch 启动失败必须节流重试（审查 2026-08，勿回退）**：启动或
+  POLLERR 重建时 `ctl_listen()`/`iface_watch_open()` 返回 -1（bind 失败、socket 目录缺失等）
+  此前被静默吞掉——daemon 永久无头运行、splitctl 连不上、单实例锁还挡住重启（POLLERR 重建
+  只覆盖"曾是合法 fd"，对启动即 -1 永不触发）。**不 exit**：此刻 BPF 已加载、tc 已挂
+  （iface_reconcile 在 ctl_listen 之前），直接退出会留活 tc filter；且 Android 降级模式
+  （bind 失败但路由正常）是既定行为。现主循环内每 `LISTEN_RETRY_MS`(10s) 重试，bind 成功
+  即恢复监听、下一轮 fd 正常入 poll。勿回退为"只打一次日志"或"启动即 exit"。
 - `ctl_reply` 返回 int（v1.2.7 审查 H4）：0=完整写出，-1=客户端断开/写失败。list-rules 的
   `ctl_rule_line` 回调收到 -1 即返回非 0，`map_rule_foreach` 提前中止——避免对已断开连接继续
   枚举数千条规则耗时。其它调用方按语句使用忽略返回值，无行为变化。

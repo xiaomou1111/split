@@ -86,14 +86,17 @@ fix_legacy() {
     if grep -q 'ports\.ubuntu\.com' "$f"; then
         echo "ok: $f 已含 ports.ubuntu.com arm64 源"; return
     fi
-    if ! grep -q '^deb .*archive\.ubuntu\.com' "$f"; then
+    if ! grep -qE '^deb .*(archive|security)\.ubuntu\.com' "$f"; then
         echo "skip: $f 无 native Ubuntu 行（非 Ubuntu 源），不动"; return
     fi
     echo "== 修复 $f: native 行加 [arch=amd64] + 追加 ports arm64（$codename）=="
     cp "$f" "$f.bak.$(date +%s)"
     # https 变体（archive.ubuntu.com 常见 https 镜像）同样要 pin——此前只匹配
     # http://，https 官方源会漏加 [arch=amd64]，追加 arm64 架构后 update 照样 404。
-    sed -i -E 's|^deb (https?://(archive|security)\.ubuntu\.com)|deb [arch=amd64] \1|' "$f"
+    # 审查（2026-08）：分隔符用 #——正则 (archive|security) 含 |，若用 | 作分隔符
+    # GNU sed 报 "unknown option to s"（syntax error），set -e 下 fix_legacy 整体中止
+    # （旧 http:// 行同样有此 bug，fix_legacy 从未真正工作过）。
+    sed -i -E 's#^deb (https?://(archive|security)\.ubuntu\.com)#deb [arch=amd64] \1#' "$f"
     cat >> "$f" <<EOF
 
 # arm64 multiarch（ports 源：archive/security.ubuntu.com 不发布 binary-arm64）

@@ -33,6 +33,13 @@
   （sources.list，<24.04）两种格式；`make prepare` 已调用，手动搭环境时先跑一次再 apt update。
 - **注意**：必须 `./scripts/ensure-arm64-source.sh` → `dpkg --add-architecture arm64` → `apt-get
   update` 的顺序（先修源再加架构，否则 update 仍会 404）。本脚本只修源，不跑 update。
+- **坑（审查 2026-08，修复前 fix_legacy 从未真正工作过）**：legacy 分支的 sed 用 `|` 作
+  分隔符但正则含交替 `(archive|security)`——`|` 同时是分隔符与交替符，GNU sed 报
+  `unknown option to 's'`（syntax error），`set -euo pipefail` 下 fix_legacy 整体中止。
+  v1.4.5 引入、v1.4.6 扩 `https?://` 时都未暴露（24.04 走 deb822 分支，legacy 只在 <24.04 跑）。
+  修复：分隔符改 `#`；连带 native 行守卫 `grep -q '^deb .*archive\.ubuntu\.com'` 漏
+  security.ubuntu.com-only 文件（sed 能 pin security 但守卫不放行），扩为
+  `grep -qE '^deb .*(archive|security)\.ubuntu\.com'`。
 - **bpftool（v1.4.5 从 prepare 移除）**：Ubuntu 24.04 无独立候选包（虚拟包），仅 `make -C kernel
   validate/disasm` 可选使用；kernel/Makefile 的 `BPFTOOL ?= bpftool` 保持默认，需要时装
   `linux-tools-common`。勿把 bpftool 加回 prepare 的 apt-get install 清单。

@@ -78,8 +78,11 @@
      文件顶部"；attach_auto 另合法于 ifaces 节，单独说明。未知 key 仍走原 WARN。
 - 坑 14（v1.4.x 审查）：**列表项超过 CFG_LIST_MAX=16 被静默丢弃**——add_str 超限 `return`
   无声吞掉第 17 条起的 proxy/direct/exclude/attach_list 项（用户以为规则生效实际没挂）。
-  补 `list_full_warn`：同一列表首次溢出告警一次（静态去重指针 + config_load 每次进入前重置，
-  不污染计数），`what` 用配置真实 key（proxy_cidr4/direct_cidr6/skip_uid 等）方便对照 yaml。
+  补 `list_full_warn`：同一列表"一次声明块"内首次溢出告警一次（静态去重指针 + config_load
+  每次进入前重置 + **列表 key 声明处清除**——规则列表声明即重置计数，若只按指针去重，
+  二次声明后的溢出会完全静默，恰违本坑初衷），`what` 用配置真实 key
+  （proxy_cidr4/direct_cidr6/skip_uid 等）方便对照 yaml；溢出项全打超长会刷屏，截断到
+  40 字符带省略号（与 set_str_checked 口径一致）。
   skip_uid 同批区分"列表已满"与"非法值"——此前容量满误报"skip_uid 非法值"。
 
 ## netlink — 接口发现/监听（不依赖 iproute2）

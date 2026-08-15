@@ -45,6 +45,9 @@
  * 会让 poll 空醒/延迟心跳——v1.0.6 旧病）。 */
 #define RECONCILE_MS        15000   /* 接口挂载自愈兜底（P3：5s→15s，事件路径已兜快速响应） */
 #define HIJACK_CHECK_MS     30000   /* 路由接管检测（P2：10s→30s，WARN 诊断 + status 读缓存） */
+/* 审查（2026-08）：ctl listen / netlink watch 重建重试节流间隔——启动或 POLLERR 重建
+ * 失败（fd==-1）后随主循环节流重试，避免每轮 poll 空醒都尝试并刷日志。 */
+#define LISTEN_RETRY_MS     10000
 
 static volatile sig_atomic_t g_stop = 0;
 static int g_hijack_last = 0; /* v1.1.3 路由接管状态（变化才打日志） */
@@ -103,6 +106,8 @@ static void tun_sync_record(int r, int *fail_cnt)
  * 与子进程的 CNIP 灌入天然无交集——若未来给 reload 增加 CNIP 重灌，
  * 必须在此处同步加 g_cnip_busy 检查，否则破坏该不变式。 */
 static volatile sig_atomic_t g_cnip_busy = 0;
+/* 审查（2026-08）：ctl listen / netlink watch 重试节流时间戳（ms，见 LISTEN_RETRY_MS） */
+static long long s_listen_retry_ms = 0;
 /* CNIP 手动/重灌请求（v1.4.1 统一调度）：CNIP_REQ_NONE=无；CNIP_REQ_UPDATE=
  * 下载+重灌（WebUI/`splitctl update-cnip`）；CNIP_REQ_RELOAD=只重读本地文件
  * 重灌（`reload-cnip`）。ctl 分支只置位 + 把 cnip_next_ms 提前到 now，由主循环
@@ -969,7 +974,10 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
     /* 4. 挂载 */
     iface_reconcile(&ctx, &cfg, NULL);
 
-    /* 5. 控制/监听 */
+    /* 5. 控制/监听 —— 审查（2026-08）：返回值不再静默吞掉。失败不 exit：此刻 BPF 已加载、
+     * tc 已挂（第 4 步 iface_reconcile），直接退出会留活 tc filter + 无守护进程刷新 map；
+     * 且 Android 降级模式（bind 失败但路由正常）是既定行为。改为主循环内节流重试
+     * （LISTEN_RETRY_MS），bind 成功即恢复监听。 */
     lfd = ctl_listen();
     evfd = iface_watch_open();
     signal(SIGINT, on_signal);
@@ -1072,7 +1080,13 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                     cnip_next_ms = now_ms() + 300000LL;
                 }
             } else if (r < 0) {
-                /* v1.2.8（审查修复）：waitpid 失败（如 ECHILD——子进程已被系统回收）
+                /* 审查（2026-08）：EINTR=waitpid 被信号打断、子进程仍在跑。此时不能走
+                 * 下面的清理——g_cnip_busy 提前归 0 破坏 H2 单写方不变式（新一轮 fork 会
+                 * 与仍在灌入的旧子进程并发写 map），且"子进程已被回收"是误判。continue
+                 * 跳过本轮，下一轮循环 cnip_pid 仍非零，重新 waitpid 即可。 */
+                if (errno == EINTR)
+                    continue;
+                /* v1.2.8（审查修复）：waitpid 真失败（如 ECHILD——子进程已被系统回收）
                  * 时若不清除 cnip_pid，会永久卡死：定时更新不再触发、g_cnip_busy
                  * 恒 1 导致 reload-cnip 永久被拒。按 fork 失败同语义清理并稍后重试。 */
                 LOG_WARNF("waitpid CNIP 子进程失败(%s)，清除更新状态，1 分钟后再试",
@@ -1081,6 +1095,27 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                 g_cnip_busy = 0;
                 cnip_cnt_invalidate(); /* ECHILD=子进程已被系统回收但确实跑过：CNIP 可能已变 */
                 cnip_next_ms = now_ms() + 60000LL;
+            }
+        }
+
+        /* 审查（2026-08）：启动时 ctl_listen/iface_watch_open 失败（fd==-1）会被静默吞掉
+         * ——daemon 永久无头运行、splitctl 连不上、单实例锁还挡住重启；主循环的 POLLERR
+         * 重建只覆盖"曾是合法 fd"，对启动即 -1 永不触发。随主循环节流重试（poll 每轮至少
+         * 2s 一醒），bind 成功即恢复监听，下一轮该 fd 正常入 poll；失败日志由 ctl_listen
+         * 内部打印、evfd 在此补打，每节流周期至多一次。 */
+        if (lfd < 0 || evfd < 0) {
+            long long now = now_ms();
+
+            if (now - s_listen_retry_ms >= LISTEN_RETRY_MS) {
+                s_listen_retry_ms = now;
+                if (lfd < 0)
+                    lfd = ctl_listen();
+                if (evfd < 0) {
+                    evfd = iface_watch_open();
+                    if (evfd < 0)
+                        LOG_ERRORF("netlink watch 重建失败(%s)，每 %d 秒重试",
+                                   strerror(errno), (int)(LISTEN_RETRY_MS / 1000));
+                }
             }
         }
 
