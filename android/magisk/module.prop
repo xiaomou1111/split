@@ -1,7 +1,7 @@
 id=ebpf-split
 name=eBPF-Split (kernel traffic split + mihomo)
-version=1.4.7
-versionCode=10407
+version=1.4.8
+versionCode=10408
 author=split-team
 description=内核级 CNIP(IPv4/IPv6) 分流 + 转发 mihomo TUN；兼容 Magisk/KernelSU/APatch
 support=https://example.invalid/split

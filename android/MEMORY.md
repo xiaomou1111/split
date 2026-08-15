@@ -93,11 +93,20 @@
 - 与 boot 自启关系：service.sh 在 splitd 起来后拉起；WebUI `start` 也会拉。手动前台
   `start-split.sh`（-d 调试）不拉 watchdog，适合一轮排障。
 - `setup-box-tun.sh`：**一键端到端接入 box mihomo（TUN 模式）**——复制 box 配置、改 tun 段（auto-route:false）、复用 CNIP、起 mihomo+splitd。真机验证可复现（CN 直连 39ms / 海外代理 219ms）。
-- `fix-mihomo-tun.sh`（v1.1.3 新增，v1.2.6 加 `device`）：**幂等修复 mihomo tun 段，对齐 eBPF-Split 契约**——
-  device:utun / auto-route:false / strict-route:false / stack:gvisor / gso:false / mtu:1500 / auto-detect-interface:false，
-  全部整行重写 sed；tun 段缺某项用 `a` 追加（**Android toybox sed 不支持 `0,/re/` 地址**，实测报
-  "no previous regex"，严禁使用）。service.sh 启动 mihomo 前 + WebUI start 前都会调用；setup-box-tun.sh
-  step2 也委托它（**tun 段 sed 只允许这一处维护**，改契约两处文档同步）。
+- `fix-mihomo-tun.sh`（v1.1.3 新增，v1.2.6 加 `device`，**v1.4.8 补 `enable:true`**）：
+  **幂等修复 mihomo tun 段，对齐 eBPF-Split 契约**——
+  enable:true / device:utun / auto-route:false / strict-route:false / stack:gvisor / gso:false / mtu:1500 /
+  auto-detect-interface:false，全部整行重写 sed；tun 段缺某项用 `a` 追加（**Android toybox sed
+  不支持 `0,/re/` 地址**，实测报 "no previous regex"，严禁使用）。service.sh 启动 mihomo 前 +
+  WebUI start 前都会调用；setup-box-tun.sh step2 也委托它（**tun 段 sed 只允许这一处维护**，改契约两处文档同步）。
+  **v1.4.8 补 `enable:true` 的动机**：此前契约清单含 enable 但脚本只修其余 6 项（只有
+  setup-box-tun.sh 内联 sed 在强制），box 原样配置/恢复备份若 `tun.enable:false` 或 tun 段无
+  enable 行 → mihomo 起不来 utun → service.sh 30s 等不到 utun 整机静默不激活；watchdog
+  `restart_mihomo` 在 API 又不可达时 5 分钟无限重启循环。现统一收敛。**实现要点：`enable`
+  是共享键名（dns 等节也有 `  enable:`），不能走 fix_key 的全文件 `^  enable:` 匹配
+  （dns 在前会把 dns.enable 改掉而 tun 段照旧不补），用 awk 限定 tun: 块内处理
+  （tun: 行后到下一个顶格 key 之前；注释/空行不结束块）。setup-box-tun.sh 相应删掉残留的
+  内联 enable/device sed（v1.4.8 前注释称"已移除"实则残留）。
   **v1.2.6 补 `device:utun`**：mihomo WebUI 重载可能把 tun.device 改空/改名 → 新 TUN 落回
   mihomo Linux 默认名 "Meta" 漂移（split 侧已有名字+类型漂移兜底，**v1.2.8 起排除系统 VPN
   的 tunN**，这里启动前强制回 utun 双保险，与 split.yaml tun_device 保持字节一致）。
@@ -187,7 +196,9 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   全走只读命令、不经 ctl socket——splitd 未运行时仍可展示，供对照 docs/03-ANDROID.md 排障。
 - **mihomo 控制（v1.1.x，WebUI 完善补字段）**：WebUI 新增 mihomo 启动状态 + 开关。
   `mihomo-status` 输出 `status=running|stopped|no-binary` + `pid` + **`ver`（v1.18.x 之类，
-  `mihomo -v` 冷启动 ~百 ms，结果缓存到 `run/mihomo.version` 文件，模块重装清 run/ 即失效）** + `log` 路径
+  `mihomo -v` 冷启动 ~百 ms，结果缓存到 `run/mihomo.version` 文件，模块重装清 run/ 即失效；
+  **v1.4.8 补：升级路径 customize.sh 也会 `rm -f` 该缓存**——"重装重建 run/"只对全新安装成立，
+  升级不重建 run/ 会让 WebUI 摘要显示旧 mihomo 版本，下次轮询自动重探）** + `log` 路径
   （app.js 按 `key=value` 正则解析）；
   `mihomo-start` 与 service.sh 同源逻辑（先调 fix-mihomo-tun.sh 对齐 auto-route:false，再 `-d $MIHOMO_DIR` 起，3 次重试）；
   `mihomo-stop` 用 `pkill -f "$MIHOMO_BIN"`（注意 `pgrep -f` 匹配 /data/adb/split/bin/mihomo 全路径，避免误杀其它）。

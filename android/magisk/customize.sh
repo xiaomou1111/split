@@ -57,6 +57,10 @@ fi
 
 # 日志/运行目录（避免运行时散落根级）
 mkdir -p "$INSTALL_DIR/logs" "$INSTALL_DIR/run"
+# v1.4.8：升级清 mihomo 版本缓存——webuiapi.sh 以 run/mihomo.version 存在为有效
+# （"模块重装会重建 run/"只对全新安装成立），升级不重建 run/ 会显示旧 mihomo 版本。
+# 下次 WebUI 轮询自动重探（mihomo -v 冷启动 ~百 ms，可忽略）。
+rm -f "$INSTALL_DIR/run/mihomo.version"
 
 # mihomo（可选，若随包携带）
 # 注意：mihomo 放运行目录 bin/（不放 modules），因为：

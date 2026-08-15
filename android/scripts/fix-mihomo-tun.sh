@@ -24,6 +24,13 @@ rm -f "$CFG.fixbak"
 cp "$CFG" "$CFG.fixbak" 2>/dev/null
 
 # 硬契约（与 setup-box-tun.sh / android/MEMORY.md 同步；改一处必改三处）：
+#   enable:true      —— v1.4.8 补充：此前仅 setup-box-tun.sh 内联强制 enable，本脚本漏项，
+#                       与 android/MEMORY 的契约清单（含 enable）不符。tun.enable:false /
+#                       tun 段无 enable 行（box 原样/恢复备份）时 mihomo 起不来 utun →
+#                       service.sh 等 30s 无 utun 整机静默不激活；watchdog restart_mihomo
+#                       在 API 又不可达时 5 分钟无限重启循环。watchdog 的 PATCH 恢复本就把
+#                       enable 拉回 true，这里统一收敛。注意：enable 是共享键名（dns 等节
+#                       也有），不能走 fix_key 的全文件 `^  enable:` 匹配，必须限定 tun 段。
 #   device:utun      —— v1.2.6 补充：device 被 WebUI 重载改空/改名是"重载后新 TUN 落回
 #                        Meta/tunN 漂移"的源头；启动前强制回 utun，与 split.yaml 的
 #                        tun_device 保持字节一致（split 侧另有名字漂移兜底，双保险）
@@ -53,6 +60,22 @@ fix_key stack "gvisor #system/minxd"
 fix_key gso false
 fix_key mtu 1500
 fix_key auto-detect-interface false
+
+# enable:true 段内限域处理（键名共享，不能走 fix_key 的全文件匹配，见上方注释）。
+# 探测 awk：tun: 行后到下一个顶格 key 之前为 tun 块（注释/空行/子键不结束块），
+# 块内已有 enable 行（任意值）→ 整行改 true；无 → 追加到 tun: 后（手法同 fix_key 的 a 追加）。
+# 幂等：enable:true 已存在时探测命中，两个 awk/sed 均不再改动。
+if awk '/^tun:/{t=1; next}
+         t&&/^[A-Za-z0-9_][A-Za-z0-9_.-]*:/{t=0}
+         t&&/^[[:space:]]*enable:/{f=1}
+         END{exit f?0:1}' "$CFG"; then
+  awk '/^tun:/{t=1; print; next}
+       t&&/^[A-Za-z0-9_][A-Za-z0-9_.-]*:/{t=0}
+       t&&/^[[:space:]]*enable:/{sub(/^[[:space:]]*enable:.*/, "  enable: true")}
+       {print}' "$CFG" > "$CFG.fix.en" && mv "$CFG.fix.en" "$CFG"
+else
+  sed -i "/^tun:/a\\  enable: true" "$CFG"
+fi
 
 if cmp -s "$CFG" "$CFG.fixbak"; then
   echo "  tun 段已合规，无需修改"

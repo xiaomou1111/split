@@ -38,10 +38,10 @@ cp -a "$BOX_MIHOMO/." "$MIHOMO_DIR/"
 
 echo "== 2. 改 tun 段（enable / device / mtu / auto-route / stack:gvisor / gso:off / auto-detect-interface）=="
 # 委托给 fix-mihomo-tun.sh（v1.1.3 抽取，单一真源）：全部整行重写、幂等。
-# 原内联 sed 已移除，防两处逻辑漂移；toybox sed 不支持 `0,/re/` 地址也在该脚本内规避。
-# 注意：fix-mihomo-tun.sh 自 v1.2.6 起也强制 device:utun（此前只补 enable/device）。
-sed -i 's/^  enable:.*$/  enable: true/' "$MIHOMO_DIR/config.yaml"
-sed -i 's/^  device:.*$/  device: utun/' "$MIHOMO_DIR/config.yaml"
+# v1.4.8：此处不再残留内联 sed——早期注释称"原内联 sed 已移除"但 enable/device 两条
+#   实际残留，且 enable 是共享键名，无作用域的全文件 `^  enable:` 替换可能误中
+#   dns.enable。enable:true / device:utun 均已收敛进 fix-mihomo-tun.sh（enable 段内
+#   限域处理），toybox sed 不支持 `0,/re/` 地址也在该脚本内规避。
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 sh "$(dirname "$SELF")/fix-mihomo-tun.sh" "$MIHOMO_DIR/config.yaml" || echo "  (fix-mihomo-tun 无 tun 段，跳过)"
 echo "-- 修改后 tun 段："

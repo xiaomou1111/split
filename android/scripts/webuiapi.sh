@@ -137,6 +137,8 @@ get_log() {
   # 参数: $1=splitd|mihomo, $2=行数（默认 200）
   which="$1"; n="${2:-200}"
   [ -n "$n" ] && case "$n" in (*[!0-9]*) n=200;; esac
+  # v1.4.8：钳制上限——超大日志 tail 全文件会打爆 WebView
+  [ "$n" -gt 5000 ] && n=5000
   case "$which" in
     splitd) L="$LOG_DIR/splitd.log" ;;
     mihomo) L="$MIHOMO_LOG" ;;
