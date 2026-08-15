@@ -389,8 +389,11 @@ int cnip_apply(struct split_bpf_ctx *ctx, const struct split_config *cfg)
         return 0;
 
     /* 先清空 v4+v6，保证每次 cnip_apply 都是"全量替换"而非追加，
-     * 上游列表收缩时旧前缀不会残留（原追加语义的 bug）。 */
-    map_cnip_clear_all(ctx);
+     * 上游列表收缩时旧前缀不会残留（原追加语义的 bug）。
+     * 审查（2026-08 P2）：清空失败必须显式报错——残留旧前缀会让"上游已移除"的
+     * 段继续直连（静默误判）。不中止（保住可用性），下次 reload 重试。 */
+    if (map_cnip_clear_all(ctx) < 0)
+        LOG_ERRORF("清空 CNIP map 失败，本次重灌可能残留旧前缀（全量替换契约被破坏）");
     /* v1.1.9：仅配置单族的路径会把未配置的一族清空（"全量替换"契约语义）。
      * 显式点明，避免配置不完整时误以为另一族仍生效。 */
     if (cfg->cnip4_path[0] && !cfg->cnip6_path[0])

@@ -19,8 +19,12 @@ static void rule_add_list(struct split_bpf_ctx *ctx,
 
 int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
 {
-    /* 先清空（幂等：remove 配置中已移除的旧项），再全量写入 */
-    map_rule_clear(ctx);
+    /* 先清空（幂等：remove 配置中已移除的旧项），再全量写入
+     * 审查（2026-08 P2）：清空失败必须显式报错——map 处于"半清空"状态时，下面
+     * 全量写入会在旧规则残留上叠加，配置中已移除的项继续命中（静默错误分流）。
+     * 不中止（保住可用性），由下次 reload 重试。 */
+    if (map_rule_clear(ctx) < 0)
+        LOG_ERRORF("清空规则 map 失败，本次应用可能残留旧规则（map 状态不一致）");
 
     /* UID 白名单（覆盖式） */
     for (int k = 0; k < cfg->nskip_uid; k++)

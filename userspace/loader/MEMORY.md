@@ -26,6 +26,12 @@
   与 `map_cnip_add_cidr` 判定口径一致（parse_pfix 0..128 + inet_pton，超范围 clamp 计合法），
   供 cni 下载校验阶段计 ok/bad，避免校验期写 map 造成 map≠file（见 cni/MEMORY.md）。
 - `map_rule_clear / map_cnip_clear`：reload 前清空对应 map（get_next_key+delete 迭代，HASH/LPM_TRIE 通用），保证"先清空再写"幂等。
+  **v1.4.7（审查 P2）**：清空失败必须回传 -1——此前 `map_clear_by_keys` 恒定返 0，任何
+  非 -ENOENT 的删除错误（EPERM/句柄失效等）被当成功吞掉，reload 后**旧规则/旧 CNIP 静默残留**
+  （配置里已移除的项继续命中）。现 `map_clear_by_keys` 对 `-ENOENT`（正常清完）返 0、其余错误
+  （首键查找失败/delete 失败/非 -ENOENT 的 next 错误）返 -1；`map_rule_clear`/`map_cnip_clear`
+  任一子 map 清空失败即回传 -1，调用方（rule.c `rule_apply_all` / cni.c `cnip_apply`）显式
+  LOG_ERROR 提示"map 状态不一致"但**不中止**（保住可用性，下次 reload 重试）。
 - **`map_rule_foreach(ctx, which, cb, priv)`（v1.2.2 新增）**：枚举某 which（0=proxy/1=direct）的 v4+v6 两个规则
   map，把每条 LPM key 还原成 CIDR 文本回调 `cb(which, cidr, priv)`（daemon `list-rules` / WebUI 规则列表用）。
   实现**必须用 prev-key 顺序迭代**（先取首键，再 `get_next_key(prev,next)` 前进）——与 `map_cnip_count` 同款、

@@ -57,6 +57,10 @@
   再试"不同——用户可再点）；cnip_next_ms 在成功分支被重设为"now+hours"，hours=0 时因
   条件 `hours>0||boot_once||g_cnip_req!=NONE` 全 false 不会重复 fire。改调度条件时四个
   触发源（定时/补拉/update-cnip/reload-cnip）必须一起维护。
+  **v1.4.7（审查 P2）**：手动 update-cnip 的"无 url 拒绝"改判"同族 url 与 path 必须同时配"——
+  此前只查 `url`，url 有值而 path 为空的族在 `cnip_auto_update` 里本就 no-op（见下 v1.3.1），
+  但 daemon 却回 `OK 已安排更新` 并按成功收尾——WebUI 上点"立即更新"看似成功实际什么都没下载。
+  现与 boot_once/v1.3.1 补拉口径统一，误配族打 ERR 说明"同族 url+path 需成对"。
 - **`status`（v1.1.3 扩展 / v1.2.7 补 tun 缺失 WARN / v1.2.8 hijack 改缓存）**：`OK prog_fd=<n> attached=<n> tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>`；
   随后可能跟 `WARN ...` 行（CNIP 0 条未导入 / 路由被 mihomo auto-route 接管 / **tun 缺失
   （map_tun=0，v1.2.7 审查 H2：代理流量被放行直连的静默降级要可见）**）——机器可解析，
@@ -303,6 +307,10 @@
   `POLLERR/POLLHUP/POLLNVAL` 而无分支消费，poll 会立即返回 → daemon 100% CPU 忙循环。
   现对两个 fd 的错误位显式处理：ctl listen / netlink watch **重建**（`ctl_listen()` /
   `iface_watch_open()`，内部各自 unlink/bind）。勿把"只查 POLLIN"改回去。
+  **v1.4.7（审查 P2）**：错误位重建后必须 `continue` 跳过本轮 POLLIN——重建把旧 fd
+  close、新 lfd 刚 bind（空监听队列），旧 `revents & POLLIN` 位仍置着，若照常进 accept
+  会对**新空 socket 阻塞 accept**（无连接 → 永久卡死主循环，后续 ctl/心跳/网络事件全停）。
+  `continue` 让下一轮 poll 用新 fd 重新就绪。勿回退为"重建后仍走 accept"。
 - **ctl listen / netlink watch 启动失败必须节流重试（审查 2026-08，勿回退）**：启动或
   POLLERR 重建时 `ctl_listen()`/`iface_watch_open()` 返回 -1（bind 失败、socket 目录缺失等）
   此前被静默吞掉——daemon 永久无头运行、splitctl 连不上、单实例锁还挡住重启（POLLERR 重建

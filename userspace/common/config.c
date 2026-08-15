@@ -428,16 +428,20 @@ int config_load(const char *path, struct split_config *cfg)
                 else if (strcmp(p, "url_v6") == 0)
                     set_str_checked(cfg->cnip6_url, "cnip.url_v6", v);
                 else if (strcmp(p, "auto_update_hours") == 0) {
-                    /* v1.1.9：atoi 对 "24abc"/负值静默吞错 → 改用 strtol+endptr 严格校验。 */
+                    /* v1.1.9：atoi 对 "24abc"/负值静默吞错 → 改用 strtol+endptr 严格校验。
+                     * 审查（2026-08 P2）：非法值用 break 会直接跳出整个解析 while 循环，
+                     * 静默丢弃该行之后的所有配置行仍返成功（如 path_v6/整个 rules 节）。
+                     * 改 continue（仅跳过本行、保留默认值）；endp==v 检出空值——strtol("")
+                     * 返 0 且校验通过，空 `auto_update_hours:` 会被静默当成 0=禁用自动更新。 */
                     char *endp = NULL;
                     long u;
 
                     errno = 0;
                     u = strtol(v, &endp, 10);
-                    if (errno != 0 || !endp || *endp != '\0' ||
+                    if (errno != 0 || !endp || endp == v || *endp != '\0' ||
                         u < 0 || u > INT_MAX) {
                         LOG_WARNF("cnip 下 auto_update_hours 非法值: %s（已忽略）", v);
-                        break;
+                        continue;
                     }
                     cfg->cnip_auto_update_hours = (int)u;
                 }

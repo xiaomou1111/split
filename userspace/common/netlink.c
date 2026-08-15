@@ -499,8 +499,14 @@ int iface_scan(struct iface_list *list)
                 struct rtattr *rta;
 
                 if (list->count >= IFACE_MAX) {
-                    LOG_WARNF("iface 扫描达到上限 %d，列表可能被截断", IFACE_MAX);
-                    goto done;
+                    /* 审查（2026-08 P2）：达到上限按扫描失败处理（return -1），而非
+                     * 返回"部分成功"的截断列表——调用方（iface_reconcile 等）把返回值
+                     * 当权威完整列表消费，会据截断后的 plan 把第 128 名之后已挂的接口
+                     * 误卸载（静默丢路由）。与 NLMSG_ERROR/畸形→-1 口径一致，调用方
+                     * 保持原状态、由下一轮 15s 心跳重试。 */
+                    LOG_WARNF("iface 扫描达到上限 %d（接口过多），视为扫描失败", IFACE_MAX);
+                    close(fd);
+                    return -1;
                 }
                 attrs_off = NLMSG_PAYLOAD(nlh, sizeof(struct ifinfomsg));
                 for (rta = (struct rtattr *)((char *)ifm + sizeof(*ifm));

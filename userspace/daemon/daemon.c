@@ -486,8 +486,13 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         if (g_cnip_busy) {
             ctl_reply(c, "ERR CNIP 更新进行中，请稍后重试");
             ctl_reply(c, "END");
-        } else if (!cfg->cnip4_url[0] && !cfg->cnip6_url[0]) {
-            ctl_reply(c, "ERR 未配置 CNIP 数据源（cnip.url_v4/url_v6），无法更新");
+        } else if (!((cfg->cnip4_url[0] && cfg->cnip4_path[0]) ||
+                     (cfg->cnip6_url[0] && cfg->cnip6_path[0]))) {
+            /* 审查（2026-08 P2）：必须同族配齐 url+path 才可更新——cnip_auto_update
+             * 对"url 有 path 无"的族判未配置（无法落盘），旧实现只查 url，配了 url 缺
+             * path 时回"OK 已安排"、子进程空转返 0、父进程按成功回收（用户以为已更新
+             * 实际没动）。与 boot_once 补拉（v1.3.1 url&&path 口径）对齐。 */
+            ctl_reply(c, "ERR 未配置可用的 CNIP 更新源（需同族配齐 cnip.url_v4/url_v6 与 path_v4/path_v6）");
             ctl_reply(c, "END");
         } else {
             g_cnip_req = CNIP_REQ_UPDATE;
@@ -1174,6 +1179,11 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
                           fds[lfd_idx].revents);
                 close(lfd);
                 lfd = ctl_listen();   /* 内部 unlink+bind+chmod */
+                /* 审查（2026-08 P2）：重建后必须跳过本轮的 POLLIN 分支——fds[lfd_idx]
+                 * .revents 是旧 fd 的快照，若同时带 POLLIN，会对新建的空监听 socket 调用
+                 * 阻塞式 accept()（ctl_listen 不设 O_NONBLOCK）→ 主循环整体冻结，心跳/
+                 * reconcile/hijack/CNIP 调度停摆。continue 后 poll 立即重报新 fd 状态。 */
+                continue;
             }
             if (evfd_idx >= 0 &&
                 (fds[evfd_idx].revents & (POLLERR | POLLHUP | POLLNVAL))) {

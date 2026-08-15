@@ -448,29 +448,38 @@ static int map_clear_by_keys(struct bpf_map *m)
     for (;;) {
         int err = bpf_map__get_next_key(m, NULL, cur, ksz);
 
-        if (err != 0)
-            break; /* -ENOENT 表示已枚举完毕；其它错误一并停止 */
+        if (err != 0) {
+            if (err == -ENOENT)
+                return 0; /* 正常清空完毕 */
+            return -1;    /* 其它错误：清空不完整，如实上报 */
+        }
         if (bpf_map__delete_elem(m, cur, ksz, 0) != 0)
-            break; /* 删除失败避开死循环 */
+            return -1; /* 删除失败避开死循环，但清空不完整必须上报 */
     }
-    return 0;
 }
 
 int map_rule_clear(struct split_bpf_ctx *ctx)
 {
-    map_clear_by_keys(ctx->m_skip_uid);
-    map_clear_by_keys(ctx->m_proxy4);
-    map_clear_by_keys(ctx->m_proxy6);
-    map_clear_by_keys(ctx->m_direct4);
-    map_clear_by_keys(ctx->m_direct6);
-    return 0;
+    /* 审查（2026-08 P2）：任一 map 清空失败必须上抛——否则 reload 在"半清空"的
+     * map 上叠加写入，配置中已移除的旧规则静默残留、继续影响数据面。仍逐个清空
+     * 其余 map（尽量清理），最终返回是否有任一失败。 */
+    int rc = 0;
+
+    if (map_clear_by_keys(ctx->m_skip_uid) < 0) rc = -1;
+    if (map_clear_by_keys(ctx->m_proxy4)   < 0) rc = -1;
+    if (map_clear_by_keys(ctx->m_proxy6)   < 0) rc = -1;
+    if (map_clear_by_keys(ctx->m_direct4)  < 0) rc = -1;
+    if (map_clear_by_keys(ctx->m_direct6)  < 0) rc = -1;
+    return rc;
 }
 
 int map_cnip_clear(struct split_bpf_ctx *ctx)
 {
-    map_clear_by_keys(ctx->m_cnip4);
-    map_clear_by_keys(ctx->m_cnip6);
-    return 0;
+    int rc = 0;
+
+    if (map_clear_by_keys(ctx->m_cnip4) < 0) rc = -1;
+    if (map_clear_by_keys(ctx->m_cnip6) < 0) rc = -1;
+    return rc;
 }
 
 /* 别名：语义同 map_cnip_clear（保留历史调用名，避免误改方断裂） */

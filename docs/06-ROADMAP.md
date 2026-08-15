@@ -94,7 +94,25 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.6（当前）        2026-08-15 全库再审查 P2 修复批（7 项，详见当次提交）：
+v1.4.7（当前）        2026-08-15 审查剩余 P2 修复批（5 项真 P2 + 1 项连带，详见当次提交）：
+                      ①config.c auto_update_hours 非法值用 break 直接跳出整个解析 while 循环，
+                        静默丢弃该行之后的所有配置行仍返成功（如 path_v6/整个 rules 节）；改
+                        continue 仅跳过本行保留默认值，并加 endp==v 检出空值（strtol("") 返 0
+                        且校验通过，空 `auto_update_hours:` 被静默当成 0=禁用自动更新）
+                      ②daemon update-cnip 只查 url 不查 path——配了 url 缺 path 时回"OK 已安排"、
+                        子进程空转返 0、父进程按成功回收（用户以为已更新实际没动）；改为与
+                        boot_once 同口径 (url&&path) 同族配齐判定，无可用组合回 ERR 点明
+                      ③daemon ctl listen fd 错误重建后同轮 POLLIN 会对新建的空监听 socket 调
+                        阻塞式 accept()（ctl_listen 不设 O_NONBLOCK）→ 主循环整体冻结（心跳/
+                        reconcile/hijack/CNIP 调度停摆）；重建后 continue 跳过本轮 POLLIN 分支
+                      ④netlink iface_scan 达 IFACE_MAX=128 时返"部分成功"截断列表——调用方
+                        （iface_reconcile）据截断 plan 把第 128 名之后已挂接口误卸载（静默丢
+                        路由）；改为 return -1，与 NLMSG_ERROR/畸形口径一致，调用方保持原状态
+                      ⑤loader map_clear_by_keys 任意错误 break 但恒返 0——clear 失败被当成功，
+                        reload 在"半清空"map 上叠加写，配置中已移除的旧规则/CNIP 前缀静默残留；
+                        改 -ENOENT 正常完成返 0、其它错误返 -1，map_rule_clear/map_cnip_clear
+                        上抛，rule_apply_all/cnip_apply 显式 LOG_ERROR（不中止，下次 reload 重试）
+v1.4.6        2026-08-15 全库再审查 P2 修复批（7 项，详见当次提交）：
                       ①splitctl send_cmd 映射 ERR 退出码——daemon 回 ERR 时 $? 非 0，
                         webuiapi/app.js 不再把操作失败当成功（规则增删/update-cnip 误报）
                       ②config.c is_section 补 '\r'——Windows/CRLF 写的 split.yaml 节头不再整节失效

@@ -10,6 +10,10 @@
 ## 关键决策与坑
 1. **rule_del 已实现（v1.0.1）**：走 `bpf_map__delete_elem` 对 LPM_TRIE 删除（kernel 5.4+ 支持）。key 的 host bits 不影响删除（LPM_TRIE 按 prefix 路径匹配节点，不检查 host bits）。
 2. **rule_apply_all 是"先清空再写"（幂等）**：开头先调 `map_rule_clear`（delete UID/proxy/direct map 的全部元素），再全量写入；reload 会把配置中已移除的旧项一并清掉。启动时调用也安全（map 本为空）。
+   **v1.4.7（审查 P2）**：清空失败显式 `LOG_ERRORF`——此前 `map_rule_clear` 恒定返 0，清空阶段
+   错误被吞，reload 后"配置中已移除的旧规则"在 map 里残留继续命中（静默错误分流）。现清空失败
+   记 ERROR 提示"本次应用可能残留旧规则（map 状态不一致）"但**不中止**（保住可用性，下次
+   reload 重试；重放基线前不 abort，规则仍按内存 cfg 全量写入）。
 3. `rule_add_list` 失败只 `LOG_WARNF`（map 满/非法 CIDR 不中断整体应用）。
 4. `map_set_cfg` 写入 default_verdict + ipv6 开关——**这是判定最后一步 / 第 2 步 v6 出口（v1.1.1 起：`ipv6_classify=false` 时 v6 在第 2 步直接直连，不再落到规则/CNIP 分支）的运行时依据**。
    - **v1.2.0：`map_set_cfg` 新签名加 `skip_uid_on`（=`cfg->nskip_uid>0`）**——内核据此短路空 map 的 UID 分支，提升热路径吞吐。语义不变（map 空时短路本就 miss）。**v1.4.0 移除 `dom_on`**（域名分流整模块删除）。

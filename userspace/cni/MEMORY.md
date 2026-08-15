@@ -29,6 +29,10 @@
    **v1.1.9：仅配置单族 path 时显式 `LOG_WARNF` 点明另一族将被清空**——"全量替换"契约
    语义下单族配置会让未配置族清零，配置不完整时不再静默。
 2. **清 map 的实现注意**：`map_cnip_clear` 走 loader 的 `map_clear_by_keys`，用"反复取首键（key=NULL）+ delete"直到 `-ENOENT`；**不能沿用前一个键继续迭代**——被删键在 LPM_TRIE 里已不存在，`get_next_key` 会提前 -ENOENT（见 loader/MEMORY.md）。
+   **v1.4.7（审查 P2）**：`cnip_apply` 对清空失败显式 `LOG_ERRORF`——此前 `map_cnip_clear_all`
+   恒定返 0，清空阶段错误被吞，重灌变成"在旧前缀残留上叠加"（**全量替换契约被静默破坏**，
+   上游列表收缩时旧段继续命中、误判直连）。现清空失败记 ERROR 提示"本次重灌可能残留旧前缀"
+   但**不中止**（保住可用性，下次 reload-cnip/定时刷新重试）。
 3. **无网络库**：`cnip_load_url` 用 `fork + exec`（**v1.2.8 由 `system()` 改造**——
    参数原样传给 execve 无 shell 解释，URL 中 `;`/`$()`/反引号等元字符不再有注入面；下载器缺失时
    子进程 _exit(127) 由 waitpid 收回报错。安卓上**未必有 curl**（Magisk 环境一般不装）——

@@ -87,6 +87,13 @@
   （proxy_cidr4/direct_cidr6/skip_uid 等）方便对照 yaml；溢出项全打超长会刷屏，截断到
   40 字符带省略号（与 set_str_checked 口径一致）。
   skip_uid 同批区分"列表已满"与"非法值"——此前容量满误报"skip_uid 非法值"。
+- 坑 15（v1.4.7 审查 P2，config 静默丢配置两连）：**`cnip` 节 `auto_update_hours` 非法值
+  用 `break` 把整个 `while(fgets)` 解析循环打断**——坑 8 只管了值合法性，非法值路径用了
+  `break`（误当"跳过本行"）实为"退出整个解析"：非法值之后的所有配置行（含同节/后续节的
+  合法 key）全部被静默丢弃，且函数仍返 0 表示成功。修复：`break`→`continue`。
+  **同值再修：空串被 `strtol` 当 0 静默通过**——`strtol("")=0` 且 `*endp=='\0'`，`auto_update_hours:`
+  留空 = 把"自动更新"静默关掉（与拼错同症状、无告警）。修复：非法判定补 `endp == v`（值全空即非法）。
+  两者格式合法配置零行为变化；shipped 配置不写此 key 不受影响。
 
 ## netlink — 接口发现/监听（不依赖 iproute2）
 - `iface_scan`：RTM_GETLINK + NLM_F_DUMP，解析 IFLA_IFNAME；**只取名字+ifindex+type+flags**，无 mac/addr。
@@ -117,6 +124,10 @@
   **v1.1.6：`nlh->nlmsg_len < sizeof(struct nlmsghdr)` 的畸形报文也走 `goto out_err` 返回 -1**，
   不再 `goto out`（否则与"失败区分未接管"语义不一致）；`iface_scan` 达 `IFACE_MAX` 上限提前
   终止时补 `LOG_WARNF` 提示列表可能被截断（否则"成功但不完整"静默无痕）。
+  **v1.4.7（审查 P2）：达 `IFACE_MAX` 上限从"截断的部分成功"改"扫描失败 return -1"**——
+  v1.1.6 只补了 WARN 提示，仍返回部分成功列表；`iface_reconcile` 把返回值当权威完整
+  集合消费，会据截断后的 plan 把第 128 名之后**已挂的接口误卸载**（静默丢路由）。现与
+  NLMSG_ERROR/畸形→-1 口径统一：调用方保持原状态，由下一轮心跳重试。
   **v1.2.0（L1）：路由 dump 遇 `NLMSG_ERROR` 从 `continue` 改为 `goto out_err` 返回 -1**——此前
   内核报错被静默吞掉，仅靠 2s SO_RCVTIMEO 兜底，误判"未接管"或拖慢本轮检测；与 iface_scan
   口径统一。
