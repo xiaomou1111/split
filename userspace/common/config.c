@@ -157,11 +157,25 @@ static void set_str_checked(char out[CFG_STRLEN], const char *what, const char *
         LOG_WARNF("配置 %s 值超长（%d>%d）已截断: %.40s…", what, n, CFG_STRLEN - 1, v);
 }
 
-static void add_str(char list[][CFG_STRLEN], int *n, const char *v)
+/* 列表溢出告警去重：同一列表首次溢出告警一次（config_load 每次进入前重置），
+ * 避免 100 条 proxy_cidr4 刷 80+ 行相同 WARN。 */
+static const void *s_list_full_warned = NULL;
+
+static void list_full_warn(const void *list, const char *what, const char *item)
 {
-    if (*n >= CFG_LIST_MAX)
+    if (s_list_full_warned == list)
         return;
-    set_str_checked(list[*n], "列表项", v);
+    s_list_full_warned = list;
+    LOG_WARNF("%s 列表已满（上限 %d 项），后续项被忽略: %s", what, CFG_LIST_MAX, item);
+}
+
+static void add_str(char list[][CFG_STRLEN], int *n, const char *what, const char *v)
+{
+    if (*n >= CFG_LIST_MAX) {
+        list_full_warn(list, what, v);
+        return;
+    }
+    set_str_checked(list[*n], what, v);
     (*n)++;
 }
 
@@ -232,6 +246,7 @@ int config_load(const char *path, struct split_config *cfg)
         LOG_ERRORF("无法打开配置 %s: %s", path, strerror(errno));
         return -1;
     }
+    s_list_full_warned = NULL; /* 列表溢出告警只报一次（见 list_full_warn） */
     config_defaults(cfg);
 
     while (fgets(line, sizeof(line), fp)) {
@@ -316,12 +331,12 @@ int config_load(const char *path, struct split_config *cfg)
             char *item = p + 1; while (*item && isspace(*item)) item++;
             str_trim_tail(item);
             switch (cur_list) {
-            case 1: add_str(cfg->attach_list, &cfg->nattach, item); break;
-            case 2: add_str(cfg->exclude,   &cfg->nexclude,  item); break;
-            case 3: add_str(cfg->proxy4,    &cfg->nproxy4,   item); break;
-            case 4: add_str(cfg->proxy6,    &cfg->nproxy6,   item); break;
-            case 5: add_str(cfg->direct4,   &cfg->ndirect4,  item); break;
-            case 6: add_str(cfg->direct6,   &cfg->ndirect6,  item); break;
+            case 1: add_str(cfg->attach_list, &cfg->nattach, "attach_list", item); break;
+            case 2: add_str(cfg->exclude,   &cfg->nexclude,  "exclude",     item); break;
+            case 3: add_str(cfg->proxy4,    &cfg->nproxy4,   "proxy_cidr4", item); break;
+            case 4: add_str(cfg->proxy6,    &cfg->nproxy6,   "proxy_cidr6", item); break;
+            case 5: add_str(cfg->direct4,   &cfg->ndirect4,  "direct_cidr4",item); break;
+            case 6: add_str(cfg->direct6,   &cfg->ndirect6,  "direct_cidr6",item); break;
             case 7: {
                 char *endp = NULL;
                 unsigned long u;
@@ -329,11 +344,14 @@ int config_load(const char *path, struct split_config *cfg)
                 u = strtoul(item, &endp, 10);
                 /* "abc" 会被 strtoul 解析成 0（=root），显式拒绝非法/溢出值；
                  * 基数固定 10，避免 "010" 被当八进制（v1.1.8 审查加固）。 */
-                if (endp != item && *endp == '\0' &&
-                    u <= UINT32_MAX && cfg->nskip_uid < CFG_LIST_MAX)
-                    cfg->skip_uid[cfg->nskip_uid++] = (uint32_t)u;
-                else
+                if (endp != item && *endp == '\0' && u <= UINT32_MAX) {
+                    if (cfg->nskip_uid < CFG_LIST_MAX)
+                        cfg->skip_uid[cfg->nskip_uid++] = (uint32_t)u;
+                    else
+                        list_full_warn(cfg->skip_uid, "skip_uid", item);
+                } else {
                     LOG_WARNF("skip_uid 非法值: %s（已忽略）", item);
+                }
                 break;
             }
             default:

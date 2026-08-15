@@ -87,7 +87,10 @@ while :; do
       # 连续 2 轮（默认 15s×2=30s）确认缺失才动作，防瞬时抖动误重启
       if [ "$mihomo_tun_fails" -ge 2 ] && [ -x "$BIN_DIR/mihomo" ]; then
         now=$(uptime_s)
-        if [ "$now" -ge "$mihomo_recover_ts" ]; then
+        # uptime 读不到时 uptime_s 回退 echo 0：此时不能再按 now>=冷却判定——
+        # 0 永远 <300，TUN 自愈会被永久禁用（v1.3.1 换 uptime 前的"回退 echo 0 旁路
+        # 冷却"意图被破坏，此处恢复：now=0 一律视为冷却已到，时钟恢复正常后冷却照常）。
+        if [ "$now" -ge "$mihomo_recover_ts" ] || [ "$now" = 0 ]; then
           log "splitd 存活但 map_tun=0（mihomo TUN 消失），尝试恢复 mihomo TUN"
           # 恢复优先级：先经 mihomo 外部控制器把 tun.enable 拉回 true（无感、不丢连接）；
           # API 不可达/失败再重启 mihomo（断开但保证重建 utun）。

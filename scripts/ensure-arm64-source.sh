@@ -91,7 +91,9 @@ fix_legacy() {
     fi
     echo "== 修复 $f: native 行加 [arch=amd64] + 追加 ports arm64（$codename）=="
     cp "$f" "$f.bak.$(date +%s)"
-    sed -i -E 's|^deb (http://(archive|security)\.ubuntu\.com)|deb [arch=amd64] \1|' "$f"
+    # https 变体（archive.ubuntu.com 常见 https 镜像）同样要 pin——此前只匹配
+    # http://，https 官方源会漏加 [arch=amd64]，追加 arm64 架构后 update 照样 404。
+    sed -i -E 's|^deb (https?://(archive|security)\.ubuntu\.com)|deb [arch=amd64] \1|' "$f"
     cat >> "$f" <<EOF
 
 # arm64 multiarch（ports 源：archive/security.ubuntu.com 不发布 binary-arm64）

@@ -71,6 +71,10 @@
   恢复后 5 分钟冷却（`mihomo_recover_ts`），防"API 拉起又被外部关掉"导致的循环重启。
   **v1.3.1（审查修复）：冷却时钟改用 `/proc/uptime` 单调秒**——旧 `date +%s` 在部分设备
   缺失（回退 echo 0 旁路冷却）且墙钟跳时会失效/误延长；uptime 不随系统时间调整。
+  **v1.4.x（审查修复）：uptime 读失败回退 0 会永久卡死冷却**——`uptime_s()` 读不到
+  /proc/uptime 时 echo 0，冷却判定 `now >= mihomo_recover_ts`（0 >= 300 恒假）让 TUN 自愈
+  永久禁用；补 `|| [ "$now" = 0 ]` 恢复 v1.3.1 前"回退旁路冷却"的文档意图（时钟异常不再
+  吞掉自愈；时钟正常时冷却行为不变）。
   **注意**：`curl` 在 Android 上未必存在——API 分支失败会自然落到重启分支，重启是保底。
   **审查修复（2026-08）：自愈 PATCH 支持 mihomo secret 鉴权**——mihomo config 配了
   `external-controller` 密码时，不带 `Authorization: Bearer` 会 401 被误判为"API 不可达"而

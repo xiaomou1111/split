@@ -76,6 +76,11 @@
   5. **顶层 key 误放节内 → 专用提示**：debug/tun_device 放节内（如 `rules:` 下）此前报通用
      "未知 key"误导（用户以为已生效）——`section_unknown_key_warn` 识别顶层 key 点明"请移到
      文件顶部"；attach_auto 另合法于 ifaces 节，单独说明。未知 key 仍走原 WARN。
+- 坑 14（v1.4.x 审查）：**列表项超过 CFG_LIST_MAX=16 被静默丢弃**——add_str 超限 `return`
+  无声吞掉第 17 条起的 proxy/direct/exclude/attach_list 项（用户以为规则生效实际没挂）。
+  补 `list_full_warn`：同一列表首次溢出告警一次（静态去重指针 + config_load 每次进入前重置，
+  不污染计数），`what` 用配置真实 key（proxy_cidr4/direct_cidr6/skip_uid 等）方便对照 yaml。
+  skip_uid 同批区分"列表已满"与"非法值"——此前容量满误报"skip_uid 非法值"。
 
 ## netlink — 接口发现/监听（不依赖 iproute2）
 - `iface_scan`：RTM_GETLINK + NLM_F_DUMP，解析 IFLA_IFNAME；**只取名字+ifindex+type+flags**，无 mac/addr。
