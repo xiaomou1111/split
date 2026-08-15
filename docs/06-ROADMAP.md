@@ -16,7 +16,7 @@
   （IP→域名）+ 内核 `map_dom_proxy/direct` 域名后缀规则（反转 LPM 匹配，优先级高于 IP
   段规则）"；v1.4.0 移除内核域名判定（policy 8→7 步）、4 个 map、学习器模块与配置，
   主线回归纯 IP/UID 分流（取舍见文末"已知设计取舍"第 4 点）
-- [x] **熄屏/doze 自愈（v1.1.7）**：daemon 主循环 5s 节流 `iface_reconcile`（netlink 事件漏收
+- [x] **熄屏/doze 自愈（v1.1.7）**：daemon 主循环 15s 节流 `iface_reconcile`（P3：5s→15s，netlink 事件漏收
    时自动重建挂载，且 `split_attach_iface` 经 `bpf_tc_query` 核验 filter 真实存在、丢失即重挂）
   + `scripts/split-watchdog.sh`（splitd 进程死亡后按同参数拉起，配停止闸）
 - [x] **mihomo TUN 自愈（v1.2.9）**：`split-watchdog.sh` 探活分支解析 `tun=` 字段，`map_tun=0`
@@ -76,7 +76,7 @@ v1.2.3                 hijack 判定修复：route_tun_hijacked 的 RTA_OIF 遍�
 v1.2.4                 tun_sync 快照权威复核 + 降级快重试：修复 mihomo 重载配置重建 utun 时，
                       事件快照恰拍在 DELLINK/NEWLINK 间隙导致"ip link 可见 utun 但 map_tun 误置 0、
                       代理完全失效"的假象（快照缺 utun 时强制重扫复核；utun 缺失降级期间
-                      心跳 1s→300ms，事件漏收时恢复 ≤300ms）
+                      心跳 1s→300ms（持续缺失按 300ms→1s→5s→30s 退避封顶，"恢复 ≤300ms"仅瞬时抖动成立））
 v1.2.5                 tun 名字漂移兜底：mihomo 重载后新 TUN 可能不再叫配置名。精确匹配
                       （含复核）仍缺时按"比最近一次有效 ifindex 更新 + IFF_UP + TUN 类名字"
                       找候选自动对齐并 WARN；"不存在"日志附带 TUN 类接口清单便于诊断
@@ -239,8 +239,8 @@ v1.2.9        审查加固 + 真机问题修复：
                        消失（如 9090 外部控制器改 tun.enable、utun 被清理）→ map_tun=0、miss_tun
                        持续增长、代理全放行直连且无报错；watchdog 探活分支解析 tun= 连续 2 轮为 0
                        时经 mihomo API 无感恢复，API 失败重启 mihomo，5 分钟冷却防循环）
-v1.2                  BPF 单元测试（回环注入最小包）+ CI
-v1.3                  Android App MVP：开关 + stats 展示（root/JNI）
+v1.2                  BPF 单元测试（回环注入最小包）+ CI（规划未交付，见"缺口（诚实清单）"）
+v1.3                  Android App MVP：开关 + stats 展示（root/JNI）（规划未交付，见"缺口（诚实清单）"）
 ```
 
 ## 已知设计取舍（不再摇摆）

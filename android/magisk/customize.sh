@@ -80,7 +80,7 @@ fi
 
 # ---------- 清理模块预留副本 ----------
 # 运行期唯一真源是 /data/adb/split/（service.sh/post-fs-data.sh 全读这里）。
-# 铺完即删 /data/adb/modules/split/ 里的 bin/config/scripts/mihomo，避免两处重复；
+# 铺完即删 /data/adb/modules/ebpf-split/ 里的 bin/config/scripts/mihomo，避免两处重复；
 # 模块目录只留 Magisk 强制文件（module.prop/customize.sh/service.sh/.../webroot）。
 # 升级时 Magisk 会整包重跑 customize.sh 重新铺入，故删除不丢功能。
 rm -rf "$MODPATH/bin" "$MODPATH/config" "$MODPATH/scripts" "$MODPATH/mihomo"

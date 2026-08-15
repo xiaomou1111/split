@@ -23,7 +23,7 @@
 - 坑 1：**utun 的 ifindex 由 map_tun 动态写入**，splitd 用 `iface_index_by_name` 解析——设备名写死 `utun`，改 mihomo 的 tun.device 必须同步 split.yaml 的 `tun_device`。
 - 坑 2：splitd 是后台 `&` 起，退出 code 不传回；降级判断靠"30s 无 utun"而非 splitd exit code（daemon exit 2 的降级提示在日志里）。
 - 坑 3：`service.sh` 用 `$MODDIR` 但 INSTALL_DIR 是 `/data/adb/split`（gen-magisk.sh 会把二进制解包到该目录）——**不要假设二进制在模块目录**。
-- **零重复（v1.1.x 约定）**：`/data/adb/modules/split/` 只做"安装源 + Magisk 必需文件"，`/data/adb/split/`
+- **零重复（v1.1.x 约定）**：`/data/adb/modules/ebpf-split/`（module.prop `id=ebpf-split`）只做"安装源 + Magisk 必需文件"，`/data/adb/split/`
   是**唯一运行真源**。customize.sh 铺完 bin/config/scripts/mihomo 到运行目录后 `rm -rf` 模块预留副本；
   升级时 Magisk 整包重跑 customize.sh 重新铺入。运行时脚本一律引用 `/data/adb/split`，禁止从 `$MODPATH` 读执行内容。
   **审查修复（2026-08）：`config/split.yaml` 加 `[ ! -f ]` 升级保护**——只在首次安装铺默认配置，
@@ -128,7 +128,7 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 ```
 - 脚本统一用变量：`BIN_DIR/CONFIG_DIR/LOG_DIR/RUN_DIR`（改一处即可）。
 - `SPLIT_SOCKET` 指向 `$RUN_DIR/splitd.sock`。
-- 该目录是唯一运行真源；模块目录（`/data/adb/modules/split/`）的 `bin/config/scripts/mihomo`
+- 该目录是唯一运行真源；模块目录（`/data/adb/modules/ebpf-split/`）的 `bin/config/scripts/mihomo`
   在安装后被 customize.sh 清理，不再持有执行副本（详见下方"零重复"约定）。
 - **测试时不要往 /data/adb/split 根级丢配置文件/日志**——用 logs/ 或临时目录，测完清掉。
 
@@ -182,7 +182,8 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   为什么放 scripts/ 而非 webroot/：webroot 由 KernelSU 设定为网页服务上下文，脚本放运行期目录
   `/data/adb/split/scripts/` 与既有 start/stop 一致，也避开执行权限歧义。
 - **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/**update-cnip（v1.4.1）**/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
-  行数 n 走整型白名单（非纯数字回退 200），`tail` → `busybox tail` → `cat` 兜底；日志尾按行截断避免打爆 WebView。
+  行数 n 走整型白名单（非纯数字回退 200，**v1.4.8 钳制上限 5000**——防超大日志 tail 全文件打爆
+  WebView），`tail` → `busybox tail` → `cat` 兜底；日志尾按行截断避免打爆 WebView。
   action 由 case 分支映射，**不透传任意 shell **；参数经 shell 引号包裹（单引号 CIDR）防注入。
 - **动作 case 缺参/失败区分（审查 2026-08）**：`get-config/save-config/validate-config/get-log` 原用
   `[ -n "$2" ] && cmd || { echo "ERR: 缺参"; exit 1; }` 链——命令**真实失败**（磁盘/落盘错误等）时
@@ -208,8 +209,10 @@ mihomo/   mihomo 配置目录（box 复制或随包）
   后台执行，与 update-cnip 共用 `g_cnip_req` 统一 fork 调度）：daemon ctl 分支只置
   `g_cnip_req=CNIP_REQ_UPDATE` + 提前 `cnip_next_ms`，主循环下一轮 poll 迭代 fork 子进程下载，ctl 立即回
   `OK 已安排 CNIP 更新`——前端 app.js 点按钮只收到"已安排"，进度看 splitd.log、CNIP 计数靠状态面板
-  5s 轮询刷新。未配 `url_v4/url_v6` → `ERR 未配置 CNIP 数据源`；更新进行中（`g_cnip_busy`）→
-  `ERR CNIP 更新进行中`。Android 无任何下载器（curl/wget/busybox，v1.4.1 起有回落）时下载失败
+  5s 轮询刷新。**未配齐"同族 url+path"（v1.4.7 起）** → `ERR 未配置可用的 CNIP 更新源（需同族配齐
+  cnip.url_v4/url_v6 与 path_v4/path_v6）`——v1.4.7 前只查 url，配 url 缺 path 时误回"OK 已安排"
+  实为空转（子进程 no-op 返 0、父进程按成功回收，用户以为已更新实际没动）；更新进行中
+  （`g_cnip_busy`）→ `ERR CNIP 更新进行中`。Android 无任何下载器（curl/wget/busybox，v1.4.1 起有回落）时下载失败
   会落本地旧文件重灌（cni/MEMORY 既有语义）。
 - **前端（WebUI 完善，v1.2.x）**：状态面板 5s 轮询补 `env`；运行状态卡新增 TUN ifindex（0=缺失放行标黄）、
   splitd PID、存活守护、运行时长；新增"环境信息"卡（内核/架构/Android/SDK/设备/SELinux）；stats 计数做

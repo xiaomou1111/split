@@ -33,8 +33,9 @@ CONFIG_BTF  (CONFIG_DEBUG_INFO_BTF)   # 便于 CO-RE 减小 BTF 依赖，GKI 默
 adb root; adb shell sh /sdcard/Android/data/.../split/scripts/check-kernel.sh
 ```
 
-> 真机注意：`/proc/config.gz` 有时不存在。check-kernel 的替代探测是**直接尝试
-> `bpf(BPF_MAP_CREATE)` 一个小 map**——能创建=大概率可行，不准时再结合 dmesg。
+> 真机注意：`/proc/config.gz` 有时不存在。check-kernel 的探测组合是 **/sys/fs/bpf 挂载 +
+> /proc/config.gz 内核配置 + /dev/net/tun 存在性**（不发起 `bpf()` 系统调用，无权限/seccomp
+> 拦截时也能静默出结果）；判定不准时再结合 dmesg。
 
 ## 2. SELinux：为什么 root 了还是 `bpf_prog_load EPERM`
 
@@ -50,14 +51,14 @@ adb root; adb shell sh /sdcard/Android/data/.../split/scripts/check-kernel.sh
    ```
 2. **精确 open/allow（推荐，我们的 magisk 模块自带）**：
    ```sh
-   # 在 service.sh 中执行，等价于 module 的 sepolicy.rule
+   # 在 service.sh 中执行（即 service.sh:35-40 的实际规则，等价于 module 的 sepolicy.rule）
    magiskpolicy --live \
-     'allow magisk bpf:bpf { prog_load prog_pin map_create map_read map_write prog_test_run sys_bpf }' \
-     'allow magisk tc:netlink_socket sextmsg' \
-     'allow magisk self:unix_stream_socket { create_stream_socket }' \
-     'allow magisk tun_device:chr_file rw_file_perms'
+     'allow magisk bpf:bpf { prog_load prog_pin map_create map_read map_write prog_test_run }' \
+     'allow magisk self:unix_stream_socket create_stream_socket' \
+     'allow magisk tun_device:chr_file rw_file_perms' \
+     'allow magisk net_device:netlink_socket create'
    ```
-   （以上为参考；不同内核的 Security 类名可能略有差异，用 `dmesg | grep avc` 对照调整。）
+   （不同内核的 Security 类名可能略有差异，用 `dmesg | grep avc` 对照调整。）
 3. **打包成 Magisk 模块的 `sepolicy.rule`**：`android/magisk/sepolicy.rule` 见其头部注释。
 4. 还有一种非常通用：直接在整个 Android 上 `echo permissive > /sys/fs/selinux/enforce`
    或锁手机进 `magisk --disable` 调 `magiskpolicy --live "permissive *"`，一般没必要。
@@ -107,7 +108,7 @@ wlan0 (WiFi) / rmnet_data0(Verizon模版) / eth0(有线) / lo(除) ...
 
 ```
 boot → post-fs-data(挂 bpffs) → late_start service.sh
- └─ 1) 校验内核能力(check-kernel.sh)    不满足 → 记 degraded，跳过 eBPF
+ └─ 1) 能力探测：splitd 二进制是否在位  缺失 → 跳过 eBPF（check-kernel.sh 是独立手检工具，service.sh 不调用）
     2) magiskpolicy 打开 bpf/tc（见 §2）
     3) sysfs 挂载 /sys/fs/bpf 或 magisk_bpf
     4) 启动 mihomo(自带或已有app) → 确保 tun0 已起
@@ -121,7 +122,7 @@ boot → post-fs-data(挂 bpffs) → late_start service.sh
 `android/magisk/` 里已放好 `module.prop、customize.sh、service.sh、post-fs-data.sh、
 sepolicy.rule` 骨架；`scripts/gen-magisk.sh` 打包 zip。
 
-> **目录职责（零重复）**：`/data/adb/modules/split/` 只是**安装源 + Magisk 必需文件**；
+> **目录职责（零重复）**：`/data/adb/modules/ebpf-split/`（module.prop `id=ebpf-split`）只是**安装源 + Magisk 必需文件**；
 > customize.sh 会把 bin/config/scripts/mihomo 铺到 `/data/adb/split/`（**唯一运行真源**）后
 > `rm -rf` 清掉模块预留副本。所有运行时脚本一律读 `/data/adb/split`，禁止从模块目录取执行内容。
 
@@ -129,7 +130,7 @@ sepolicy.rule` 骨架；`scripts/gen-magisk.sh` 打包 zip。
 
 | 环节 | 降级动作 | 用户感知 |
 |---|---|---|
-| BPF 加载失败 | 仅提示，启动"纯 TUN"模式（mihomo 自身 auto-route） | 仍然能上网，分流交给 mihomo |
+| BPF 加载失败 | 跳过 eBPF、仅起 mihomo（auto-route 保持 false，不自动接管路由） | 仍可上网，但流量不进 mihomo TUN（需 TUN 代理请自行给 mihomo 配 auto-route） |
 | mihomo 未开 tun | splitd 启动失败并报错给你 | 无网（故意的，提示先起 mihomo） |
 | 单一接口 attach 失败 | 跳过该接口，写日志 | 个别网卡不走分流 |
 
@@ -285,7 +286,8 @@ make -C kernel bpf
 ## 10. 常见坑自查清单（Q&A）
 
 Q1. 加载后 google 都玩不开手，curl 直连反而好 → 检查 skip_uid 是否忘了把 mihomo uid 加进去（§3）。
-Q2. 手机切换 wifi 后就 Lose 分流 → 重新 `splitctl status` / `--reload`；iface 广播来不及 → 后续版本 netlink。
+Q2. 手机切换 wifi 后就 Lose 分流 → 现在已是 netlink 事件订阅 + 15s reconcile 自动重挂（iface.c，
+  见 §5），一般无需手动；仍异常时 `splitctl status` 看 attached、必要时 `reload` 强制对齐。
 Q3. fake-ip 模式下 CN 流量也走 mihomo：→ 这是预期，见 §4。
 Q4. `avc: denied { prog_load }` → SELinux §2 对照 dmesg 修。
 Q5. 设备是 4.19 老内核 → tc cls 可用性需确认，先 `check-kernel.sh`；不行的情况下降级。

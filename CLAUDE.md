@@ -57,7 +57,7 @@ split.bpf.c（唯一入口）──> parse.h（安全解析）──> policy.h�
 - `maps.h` 是全部 BPF map 的单一真相源；改 map 类型/容量/结构必须同步 `userspace/loader/loader.c` 的按名查找期望表与 docs/02 的 map 表。
 
 **用户态** `userspace/`（C + libbpf≥1.0，无其它第三方依赖）：
-- `splitd`（daemon/daemon.c）：生命周期、ctl 协议、iface 挂载自愈心跳（5s）、tun ifindex 存活同步（1s 心跳）、CNIP 定时刷新（fork 子进程）。
+- `splitd`（daemon/daemon.c）：生命周期、ctl 协议、iface 挂载自愈心跳（15s，netlink 事件路径兜快速响应）、tun ifindex 存活同步（1s 心跳）、CNIP 定时刷新（fork 子进程）。
 - `splitctl`（cli/）：`start stop status stats list-rules reload reload-cnip update-cnip add-rule del-rule validate`，经 Unix socket 与 daemon 通信。
 - 模块划分：common（log/config 极简 YAML/netlink/paths）、loader（加载+tc 挂载）、cni（CNIP）、rule（规则）。
 

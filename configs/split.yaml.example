@@ -3,7 +3,7 @@
 # 只支持：section: / key: value / - list item / # 注释
 # ============================================================================
 
-debug: false            # true 时不 daemon 化，并输出 debug 日志
+debug: false            # true：log 级别=debug（是否后台化由 splitctl start 决定，与 debug 无关）
 
 # ---- 代理内核对接（把该设备的 ifindex 写进 map_tun）----
 tun_device: utun            # mihomo tun.device（configs/mihomo/*.yaml 里一致）
@@ -14,9 +14,10 @@ ifaces:
   attach_list:             # attach_auto=false 时才用
     - wlan0
     - rmnet_data0
-  exclude:                 # 前缀匹配排除
+  exclude:                 # 前缀匹配排除（tun/utun 必须排除，防回环）
     - lo
     - tun
+    - utun
     - tap
     - dummy
 

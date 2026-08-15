@@ -5,7 +5,7 @@
 
 1. **权限**：root（Magisk/KernelSU）+ SELinux 放行（sepolicy / magiskpolicy）
 2. **打包**：Magisk 模块结构（`android/magisk/`）
-3. **自检/降级**：`check-kernel.sh` 先探测，不满足就自动退纯 TUN
+3. **自检/降级**：`service.sh` 探测 `splitd` 二进制在位即走 eBPF；缺失则跳过 eBPF 仅起 mihomo。内核能力矩阵用 `check-kernel.sh` 手动评估（服务端不调用它）
 4. **存活守护**：`split-watchdog.sh`（splitd 探活拉起 + mihomo TUN 消失自愈，v1.2.9）
 
 ## 装机流程（Magisk 模块）
@@ -41,7 +41,7 @@ adb shell su -c "/data/adb/split/bin/splitctl stats"
 ```
 android/
 ├── README.md             ← 本文件
-├── magisk/               ← Magisk 模块骨架（装完即 /data/adb/modules/split-magisk/）
+├── magisk/               ← Magisk 模块骨架（module.prop `id=ebpf-split`，装完即 /data/adb/modules/ebpf-split/）
 │   ├── module.prop       ← 模块元信息
 │   ├── customize.sh      ← 安装时动作（把二进制拷进 /data/adb/split/）
 │   ├── post-fs-data.sh   ← 早启动：挂载 bpffs
@@ -53,6 +53,8 @@ android/
 │   ├── stop-split.sh     ← 手动停止
 │   ├── split-watchdog.sh ← 存活守护：splitd 探活拉起 + mihomo TUN 消失自愈（v1.2.9）
 │   ├── setup-box-tun.sh  ← 一键接入已有 box 代理（复用 mihomo + 订阅）
+│   ├── fix-mihomo-tun.sh ← 启动前强制对齐 mihomo tun 段契约（tun.enable:true / auto-route:false 等，幂等）
+│   ├── clean-mihomo-residue.sh ← 清理 mihomo auto-route 残留的路由/ip rule（幂等，防 hijack 误报）
 │   └── webuiapi.sh       ← KernelSU WebUI 后端（root，动作白名单）
 ├── magisk/webroot/       ← KernelSU WebUI 前端（index.html + app.js）
 └── app/                  ← 预留原生 App 骨架位置（见其中 README）
@@ -72,5 +74,5 @@ android/
 
 - **必须 root**；未 root 的手机请用 mihomo 官方 APK 的 TUN 模式（本框架自动降级即可，不装模块）。
 - **fake-ip 模式失去内核 CNIP 分流**（原因见 docs/03-ANDROID.md §4）。
-- 设备内核老于 4.19 或厂商砍了 `CONFIG_NET_CLS_BPF` → 模块启动时自动跳过 eBPF，
-  退化为"mihomo 纯 TUN"（`service.sh` 会自动加 `auto-route` 让 mihomo 自己接管）。
+- 设备内核老于 4.19 或厂商砍了 `CONFIG_NET_CLS_BPF` → 模块启动时跳过 eBPF、仅起 mihomo
+  （`auto-route` 保持 false，不自动接管路由；需 TUN 代理请自行改 mihomo 配置）。

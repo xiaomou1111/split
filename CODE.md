@@ -45,7 +45,7 @@ split.bpf.c ──> parse.h（解析）──> policy.h（裁决）──> radix
 ```
 1. stats_inc(STAT_TOTAL)             # 计数
 2. parse_skb(skb, &pkt)              # 解析，失败→TC_ACT_OK 放行
-3. uid = bpf_get_socket_uid(skb)     # 安卓每 app 一 uid
+3. uid = bpf_get_socket_uid(skb)     # 安卓每 app 一 uid（前置条件 cfg->skip_uid_enabled，见 split.bpf.c:47-49）
 4. verdict = policy_judge(...)       # 7 步裁决
 5. 若 TUN → tun_ifindex() 检查 → bpf_redirect(tun, 0)
 6. 直连 → TC_ACT_OK
@@ -97,7 +97,7 @@ radix_match6(&map_cnip6, ip6_ptr)
 6. CNIP(4/6)           → PASS
 7. 其余                → cfg->default_verdict（默认 TUN）
 ```
-内置段用 `bpf_ntohl` 转主机序比较（跨 CPU endian 一致）。
+内置段：v4 用 `bpf_ntohl` 转主机序比较，v6 逐字节数组比较（均跨 CPU endian 一致，policy.h:49-63）。
 
 ---
 
@@ -123,6 +123,9 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 | rule/rule.c | 规则管理（CIDR） | rule_apply_all / rule_add / rule_del |
 | daemon/daemon.c | 生命周期 + ctl 协议 | daemon_loop / ctl_serve |
 | cli/splitctl.c | 命令行 | 见下 |
+
+> **splitd 退出码契约**（改必同步 `android/magisk/service.sh`，见 daemon/MEMORY）：config 失败 **exit 1**、
+> BPF 加载失败 **exit 2**（直接退出，非降级）、tun 缺失 **exit 3**（BPF 已载、属预期降级路径）、单实例锁被占 **exit 4**。
 
 ### 3.3 ctl 协议（daemon ↔ cli 硬契约）
 
@@ -160,6 +163,8 @@ config_load → split_load(loader.c) → iface_resolve_tun → map_set_tun
 | gen-magisk.sh | 打包 Magisk zip（分层结构） |
 | fetch-cnip.sh | 下载 CNIP 数据 |
 | load-debug.sh | 宿主机调试加载 |
+| bump-version.sh | 版本号递增唯一入口（patch/minor/major，同步 module.prop/roadmap/根文档版本标注） |
+| ensure-arm64-source.sh | 交叉编译前把 Ubuntu apt 源 pin `[arch=amd64]`（防 arm64 update 404） |
 
 **zip 结构**（gen-magisk.sh）：
 ```

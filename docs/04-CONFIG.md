@@ -9,7 +9,7 @@
 ## 1. 顶层
 
 ```yaml
-debug: false              # true：log 级别=debug，且不 daemon 化
+debug: false              # true：log 级别=debug（是否后台化由 splitctl start 决定，与 debug 无关）
 tun_device: utun          # 代理 TUN 设备名（mihomo tun.device，二者必须一致）
 ```
 
@@ -86,6 +86,9 @@ cnip:
 
 > linux 桌面请改成自己的绝对路径（如 /etc/split/cn_cidr_v4.txt）。
 > 两个 path 都留空 = 纯规则分流（不做 CNIP）。
+> **`auto_update_hours` 非法值/留空（v1.4.7 起）** → WARN 并保留默认 24，仅跳过该行继续解析——此前
+> 非法值用 `break` 误跳出整个解析循环，会静默丢弃其后所有配置行（含 `path_v6`/整个 `rules` 节）
+> 仍返成功；留空则被 `strtol("")` 当 0 静默关掉自动更新。
 > **自动更新**：daemon 每 `auto_update_hours`（默认 24=每天）用下载器下载 `url_v4/v6`
 > 到 `path_v4/v6` 覆盖本地文件，再全量重灌 `map_cnip4/6`（先清空后写入，幂等）。
 > 下载器探测顺序：curl → wget/busybox（绝对路径优先，回落 PATH；Android Magisk 环境通常

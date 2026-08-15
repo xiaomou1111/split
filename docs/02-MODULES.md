@@ -23,7 +23,7 @@ L4 平台胶水     android/magisk
   |------|-----|-----|-------|------|
   | map_cnip4 | LPM_TRIE | u32 pfix + u8[4] | u8 used | 中国 IPv4 |
   | map_cnip6 | LPM_TRIE | u32 pfix + u8[16] | u8 used | 中国 IPv6 |
-  | map_rule_proxy4/6 | LPM_TRIE | 同 | u8 | 强制代理段（如 fake-ip, 失败只段）|
+  | map_rule_proxy4/6 | LPM_TRIE | 同 | u8 | 强制代理段（如 fake-ip 池） |
   | map_rule_direct4/6 | LPM_TRIE | 同 | u8 | 强制直连段 |
   | map_skip_uid | HASH | u32 uid | u8 allow | uid 白名单（mihomo/root） |
   | map_tun | ARRAY(1) | u32 idx | u32 ifindex | 代理 tun 设备 ifindex（daemon 动态同步：mihomo 重建 utun 时 ifindex 漂移自动对齐；接口消失置 0 → BPF 侧放行保联网） |
@@ -31,8 +31,8 @@ L4 平台胶水     android/magisk
   | map_rawip | HASH | u32 ifindex | u8 used | RAWIP 接口集合（v1.1.5：Android 蜂窝 rmnet_data*，ARPHRD_RAWIP=519，无以太网头；用户态挂载/网络事件时同步，内核据此跳过 L2 解析） |
   | map_stats | PERCPU_ARRAY | u32 类型 | u64 计数 | 观测 |
 
-- **实现要点**：所有 map 在文件头部集中声明，改端口只需动这一个文件。
-- **测试**：`tests/unit/maps_test.c` 验证加载正确大小、类型、max_entries。
+- **实现要点**：所有 map 在文件头部集中声明，改 map 定义只需动这一个文件。
+- **测试**：`tests/unit/` 目前为空骨架（`tests/unit/maps_test.c` 未建），map 加载正确性靠 splitd 启动 + `splitctl status` 冒烟覆盖。
 
 ### 1.2 parse.h — 报文解析
 - **职责**：给定 `__sk_buff*`，安全读出 L3 元数据 `family + dst`（policy 判定的全部输入）。
@@ -48,13 +48,13 @@ L4 平台胶水     android/magisk
   int parse_skb(struct __sk_buff *skb, struct split_pkt *p);  /* 1=成功 0=不可判(放行) */
   ```
 - **实现要点**：所有读写带 `if (data + N > data_end) return 0` 守卫；支持 vlan(0x8100/0x88a8) 至双标签 QinQ；rawip（蜂窝）无 L2 路径。
-- **测试**：BPF 单测用 `tests/bpf/`（patterns + verifier 判定）会构造最小以太网/IP 包。
+- **测试**：`tests/bpf/` 未建（无自动化单测）；边界用例由 WSL2 功能测试与真机 verifier 验证覆盖。
 
 ### 1.3 radix.h — LPM_TRIE 匹配
 - **职责**：对给定地址做最长前缀匹配（用于 cnip/proxy/direct 三套树，四/六族统一）。
 - **对外契约**：`radix_match4(map, be32)` / `radix_match6(map, ip6_ptr)`（宏，返回命中 bool）
 - **实现要点**：构造 key 时 prefixlen 固定为 32/128（即"查最具体"）；LPM 自动回溯。
-- **测试**：unit：向 trie 插入 `10.0.0.0/8` 查询 `10.1.2.3/32` 命中与 `8.8.8.8/32` 不命中。
+- **测试**：待补（`tests/unit/` 空骨架）：向 trie 插入 `10.0.0.0/8` 查询 `10.1.2.3/32` 命中与 `8.8.8.8/32` 不命中。
 
 ### 1.4 policy.h — 判定
 - **职责**：把 parse 输出 + UID → Verdict{直连,代理}。
@@ -149,7 +149,8 @@ L4 平台胶水     android/magisk
 ### 2.5 cli/ splitctl
 - 子命令：`start stop status stats list-rules reload reload-cnip update-cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
   `update-cnip`（v1.4.1）：手动触发 CNIP 更新——与 `reload-cnip`（只重读本地文件）不同，会重新下载
-  `cnip.url_v4/url_v6` 后全量重灌（复用定时自动更新的后台 fork 路径，ctl 立即回"已安排"）。
+  `cnip.url_v4/url_v6` 后全量重灌（复用定时自动更新的后台 fork 路径，ctl 立即回"已安排"；
+  **v1.4.7 起需同族配齐 url+path 才动作**，未配齐回 ERR 点明、不再误报"已安排"）。
 - `list-rules`（v1.2.2）：逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表用。
 - `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 30s（P2：10s→30s）自检路由接管，变化即打日志。
   **v1.2.8（审查修复）**：`hijack` 字段读主循环节流缓存的 `g_hijack_now`（含 -1=检测失败），
@@ -175,11 +176,13 @@ L4 平台胶水     android/magisk
 
 ## 3. 平台胶水（android/）
 
-- `android/magisk/*`：Magisk 模块结构。启动 `service.sh` → root 下依次：
-  1. mount bpffs、权限检查
+- `android/magisk/*`：Magisk 模块结构。bpffs 挂载在 `post-fs-data.sh`（early 阶段）；`service.sh`
+  （late_start）→ root 下依次：
+  1. 能力探测：`splitd` 二进制是否在位（缺失则跳过 eBPF，仅尝试起 mihomo）
   2. 调用 `magiskpolicy --live` 打开 bpf/tc 权限（sepolicy）
-  3. 起 mihomo（或要求已装）→ 起 splitd -c config → 拉起 split-watchdog.sh 守护（v1.1.7）
-- `android/scripts/check-kernel.sh`：`uname -r`，尝试 `bpf()` 系统调用探活，输出支持度矩阵。
+  3. 起 mihomo（或要求已装）→ 等 utun → 起 splitd -c config → 拉起 split-watchdog.sh 守护（v1.1.7）
+- `android/scripts/check-kernel.sh`：探测 `/sys/fs/bpf` 挂载、`/proc/config.gz` 内核配置、`/dev/net/tun`
+  （能力清单 + 支持度矩阵，不发起 `bpf()` 系统调用）。
 - `android/scripts/split-watchdog.sh`（v1.1.7 / v1.2.9 增 mihomo TUN 自愈）：splitd 存活守护——15s 探活 `splitctl status`，
   失控则按原参数拉起。**停止闸 `run/splitd.disabled` 由 `splitctl stop/start` 直接读写**
   （v1.1.7 起收敛于此，任意 stop 路径都生效，防"刚 stop 又被拉起"；见 android/MEMORY.md）。
@@ -199,7 +202,7 @@ L4 平台胶水     android/magisk
 | 增加一条同优先级规则 | `userspace/rule/` + config | 内核 |
 | 调整判定顺序 | `kernel/bpf/policy.h`（+ 文档），重新编译 BPF | userspace 无感知 |
 | 改 map 上限/类型 | `kernel/bpf/maps.h`（+ loader 的期望） | 其余不变 |
-| 新增 1 个 hook(如 ingress) | `split.bpf.c` 加 SEC + attach.c | 其余不变，说明连通 |
+| 新增 1 个 hook(如 ingress) | `split.bpf.c` 加 SEC + `loader.c` 的 `split_attach_iface`（无独立 attach.c） | 其余不变，说明连通 |
 
 统一规则：**涉及 map 的改动，唯一牵一而动是 `maps.h` + `loader` 的 map-fd 表**，
 其余模块通过“map 名”解码接口进化。

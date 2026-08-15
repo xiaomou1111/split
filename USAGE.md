@@ -226,7 +226,7 @@ splitctl stats                       # 内核计数
 splitctl list-rules                  # 当前在线规则（proxy/direct 行，v1.2.2）
 splitctl reload                      # 重载配置（增量写 map）
 splitctl reload-cnip                 # 只刷新 CNIP（重读本地文件重灌）
-splitctl update-cnip                 # 手动更新 CNIP（重新下载 url_v4/v6 后重灌，后台执行）
+splitctl update-cnip                 # 手动更新 CNIP（重新下载 url_v4/v6 后重灌，后台执行；需同族配齐 url+path，v1.4.7 起缺任一回 ERR）
 splitctl add-rule <cidr> [direct|proxy]   # 在线加规则
 splitctl del-rule <cidr> [direct|proxy]   # 在线删规则
 splitctl validate -c cfg             # 只校验配置
@@ -253,13 +253,14 @@ splitctl validate -c cfg             # 只校验配置
 |---|---|---|
 | total | 所有经 eBPF 的包 | >0 |
 | direct_cn | CNIP 命中直连 | curl 百度后 +1 |
-| direct_rule | direct 规则段命中 | 内网流量 +1 |
+| direct_rule | 直连判定类计数（内置本地∪direct 规则段∪默认直连共用，v1.4.6 语义澄清） | 内网/本地流量 +1 |
 | proxy | 进代理（proxy 规则/默认） | curl 谷歌后 +1 |
 | skip_uid | 白名单跳过 | 系统流量为主 |
 | parse_err | 解析失败（放行） | 应≈0 |
 | redirect_err | 重定向失败 | 恒 0 为佳 |
 | dropped | 丢包（不应发生） | 恒 0 |
 | miss_tun | 想代理但 tun 未就绪（放行） | 启动初期可出现；**持续增长 = mihomo TUN 消失（v1.2.9 watchdog 自愈，见 Q8）** |
+| direct_v6 | v6 且 default.ipv6:false 的配置性直连（判定第 2 步） | 设了 ipv6:false 时增长 |
 
 ---
 

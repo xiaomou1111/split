@@ -137,7 +137,7 @@ adb pull /data/local/tmp/mihomo build/arm64/mihomo
 
 ```bash
 # 1) 编译 + 通过内核 verifier（splitd 加载成功即 verifier 通过）
-sudo ./userspace/build/splitd -c configs/split.yaml -b kernel/bpf/split.bpf.o
+sudo ./userspace/build/splitd -c configs/split.yaml.example -b kernel/bpf/split.bpf.o
 #    exit 0 / exit 3（缺 tun，属预期）= 加载 OK；exit 2 = 加载失败需排查
 # 2) 旧式命令已失效，仅作参考：
 #    bpftool prog load kernel/bpf/split.bpf.o /sys/fs/bpf/test type sched_cls

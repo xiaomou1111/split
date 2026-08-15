@@ -41,7 +41,7 @@
 ## 语言与风格
 
 - 仓库文档/注释用**中文**；代码标识符一律英文 `snake_case`。
-- 源文件 `.c/.h` 成对；头文件防护宏 `#ifndef __SPLIT_..._`（统一前缀）。
+- 源文件 `.c/.h` 成对（例外：cli 为单文件 `splitctl.c`；kernel/bpf 含纯头文件 parse.h/radix.h/policy.h/maps.h）；头文件防护宏有两套前缀：内核 `#ifndef __SPLIT_*_H_`、用户态 `#ifndef SPLIT_USERS_*_H_`。
 - 每个 `.c/.h` 顶部带 `/* SPDX-License-Identifier: GPL-2.0` 头。
 - 命名：map 名前缀 `map_`；函数前缀 `split_/cnip_/iface_/rule_/ctl_`。
 - map 值统一 `__u8 = 1` 成员标记；`__be` 表示网络字节序。

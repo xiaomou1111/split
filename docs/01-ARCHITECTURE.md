@@ -69,7 +69,7 @@ CN 流量（如百度）路径：
 
 ## 5. 安全（BPF verifier）边界的自检清单
 
-- 所有读包都先 `data + n*size <= data_end`（parse.h 的 `skb_dlen` 检查）。
+- 所有读包都先 `data + offset + len <= data_end`（parse.h 内联守卫，见 parse.h:66/97/101/109；不存在独立的 `skb_dlen` 函数）。
 - LPM trie key 构造用栈上结构、大小合法。
 - 单个程序不超过逻辑复杂度上限（回归验证器规则：不取未定义值、无循环、栈≤512B）。
 - 出错一律 `return TC_ACT_OK`（放行），**绝不在不明确时丢包**——避免断网打不开。
@@ -85,7 +85,7 @@ CN 流量（如百度）路径：
    不通属于可预期行为。
 3. **本地回环**：`lo` 不受影响。
 4. **vlan/多标头**：parse 支持单层与双标签 QinQ VLAN（0x8100/0x88a8，`VLAN_MAX_TAGS=2`）
-   跳过外层头；三标签以上不剥，按外层判定，保持默认放行。
+   跳过外层头；三标签以上不再剥，ethertype 不匹配 IP/IPv6 → 解析失败 return 0，按默认放行。
 5. **TUN 设备命名冲突**：若 mihomo 自带 utun 名称冲突请改 config（同步 split.yaml `tun_device`）。
 6. **TUN 以太网头（已实测）**：tc egress 的 skb 带 L2 头，但 `bpf_redirect(tun,0)` 到
    /IFF_TUN 设备时，tun xmit 会**自动剥掉以太网头**，mihomo 读到的是裸 IP（WSL2 实测验证：
@@ -100,7 +100,7 @@ CN 流量（如百度）路径：
 |-----|------|----------|
 | 0 STAT_TOTAL | 进入 eBPF 的包总数 | >0 |
 | 1 STAT_DIRECT_CN | CNIP 命中直连 | curl 百度后 +1 |
-| 2 STAT_DIRECT_RULE | direct 规则命中 | 内网流量 +1 |
+| 2 STAT_DIRECT_RULE | 直连判定类（内置本地∪direct 规则∪默认直连共用，v1.4.6 语义澄清） | 内网/本地流量 +1 |
 | 3 STAT_PROXY | 进代理（proxy 规则/默认） | curl 海外后 +1 |
 | 4 STAT_SKIP_UID | 白名单跳过 | mihomo 自己发包 |
 | 5 STAT_PARSE_ERR | 解析失败（放行） | 应为 0 但允许少量 |

@@ -21,7 +21,7 @@
 - 改动 map 内容/结构 → 编辑 `kernel/bpf/maps.h`，同时：
   - 更新 `docs/02-MODULES.md` 的 map 表
   - 检查 `userspace/loader/loader.c` 的 map 名引用
-- 新增一个 hook（如 ingress）→ `split.bpf.c` 增加 SEC + `attach.c`，其余不动。
+- 新增一个 hook（如 ingress）→ `split.bpf.c` 增加 SEC + 用户态 `userspace/loader/loader.c`（`split_attach_iface`，无独立的 `attach.c`），其余不动。
 
 ## 3. BPF 编写纪律（verifier 相关）
 
@@ -38,6 +38,8 @@
 - 影响：
 - 验证：
 ```
+
+（排版约定：两行也可内联进 subject 单行，仓库实际两种风格并存——以 `1a3a2dd` 为正文模板、`11e67ef` 为内联参考；核心是 `<模块>:` 前缀 + `- 影响：`/`- 验证：` 三要素齐全。）
 
 示例：
 ```
