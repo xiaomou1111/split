@@ -83,7 +83,8 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
      * NULL——未写入时返回全零元素（default_verdict=0=直连），旧注释"map 未
      * 初始化按默认代理"并不成立。现以 loader 写入的 `bpf_trace_enabled==1`
      * 作为"已初始化"哨兵：=0 视为未写入/写入失败，回落到 TUN 安全默认。 */
-    struct split_cfg default_cfg = { .default_verdict = SPLIT_VERDICT_TUN };
+    struct split_cfg default_cfg = { .default_verdict = SPLIT_VERDICT_TUN,
+                                     .cnip_enabled = 1 };
 
     if (!cfg || cfg->bpf_trace_enabled == 0)
         cfg = &default_cfg;
@@ -145,16 +146,19 @@ static __always_inline int policy_judge(const struct split_pkt *pkt,
         }
     }
 
-    /* 6. CNIP（中国段 → 直连）—— 核心内核分流 */
-    if (pkt->family == SPLIT_FAMILY_IPV4) {
-        if (radix_match4(&map_cnip4, pkt->dst.ip4)) {
-            stats_inc(STAT_DIRECT_CN);
-            return SPLIT_VERDICT_PASS;
-        }
-    } else if (pkt->family == SPLIT_FAMILY_IPV6) {
-        if (radix_match6(&map_cnip6, pkt->dst.ip6)) {
-            stats_inc(STAT_DIRECT_CN);
-            return SPLIT_VERDICT_PASS;
+    /* 6. CNIP（中国段 → 直连）—— 核心内核分流。运行时临时开关关闭时跳过
+     * 查询，继续落到第 7 步 default_verdict；map 内容仍由用户态正常刷新。 */
+    if (cfg->cnip_enabled) {
+        if (pkt->family == SPLIT_FAMILY_IPV4) {
+            if (radix_match4(&map_cnip4, pkt->dst.ip4)) {
+                stats_inc(STAT_DIRECT_CN);
+                return SPLIT_VERDICT_PASS;
+            }
+        } else if (pkt->family == SPLIT_FAMILY_IPV6) {
+            if (radix_match6(&map_cnip6, pkt->dst.ip6)) {
+                stats_inc(STAT_DIRECT_CN);
+                return SPLIT_VERDICT_PASS;
+            }
         }
     }
 

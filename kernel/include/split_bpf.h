@@ -54,6 +54,7 @@ struct split_cfg {
     __u8  ipv6_classify;    /* 0/1 */
     __u8  skip_uid_enabled; /* map_skip_uid 非空=1（热路径：空则跳过 get_socket_uid+查表） */
     __u8  reserved[3];
+    __u8  cnip_enabled;     /* 0/1：CNIP 命中是否参与策略裁决（运行时临时开关） */
 };
 
 /* ---- stats key 常量 ---- */
@@ -73,7 +74,7 @@ enum split_stats_key {
 
 #ifndef __KERNEL__
 /* 仅 userspace 使用的宏（编译 bpf 时不可见） */
-#define SPLIT_VERSION "1.4.8"
+#define SPLIT_VERSION "1.4.9"
 #define SPLIT_PIN_NS "/sys/fs/bpf/split"
 #define SPLIT_SOCKET "/run/splitd.sock"
 #define SPLIT_LOG "/var/log/splitd.log"

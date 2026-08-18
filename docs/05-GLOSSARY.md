@@ -4,7 +4,7 @@
 
 | 术语 | 含义 |
 |---|---|
-| CNIP | 中国大陆 IP 地址段列表（含 IPv4/IPv6），来自各公开维护的"中国 IP 段"数据集 |
+| CNIP | 中国大陆 IP 地址段列表（含 IPv4/IPv6），来自各公开维护的"中国 IP 段"数据集；运行时可用 `splitctl cnip on|off|status` 临时控制是否参与策略裁决 |
 | LPM_TRIE | 最长前缀匹配树；内核 BPF map 类型，适合路由前缀查询 |
 | CO-RE | Compile Once, Run Everywhere；靠 BTF 在运行时适配内核结构体偏移 |
 | tc / clsact | 流量控制；`clsact` 允许在设备 ingress/egress 挂 BPF 过滤器 |
@@ -52,6 +52,7 @@ iface 订阅 netlink；断连自动 detach，重连自动 attach。详见 docs/0
 ```bash
 splitctl stats            # 看 per-cpu 计数器
 splitctl status           # 查看当前挂载的接口/map 状态
+splitctl cnip on|off|status # 临时开启/绕过 CNIP 策略查询
 # 内核侧 trace：
 bpftool prog show; bpftool map dump id <map_id>
 ```

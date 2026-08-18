@@ -10,8 +10,9 @@
 #define RULE_PROXY 0
 #define RULE_DIRECT 1
 
-/* 把配置里的 rule 段全部写入 map（幂等；先清空再写） */
-int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg);
+/* 把配置里的 rule 段全部写入 map（幂等；先清空再写）；cnip_on 为当前进程临时开关。 */
+int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg,
+                   bool cnip_on);
 
 /* 单条 cidr 的 add/del（对应 splitctl add-rule/del-rule） */
 int rule_add(struct split_bpf_ctx *ctx, const char *cidr, int which);

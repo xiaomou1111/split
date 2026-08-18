@@ -8,7 +8,7 @@
   `-b /data/adb/split/bin/split.bpf.o`（webuiapi.sh 已带）。**v1.1.9：`-d`（零参）从"splitd 路径"
   改为 debug，路径改由 `-s` 指定**——与 daemon 的 `-d` 语义对齐；splitctl 收到 `-d` 会把它转发给
   派生 splitd（`splitd -d` 即 debug）。无脚本依赖旧 `-d=路径`（grep 已核实）。
-- `stop` / `status` / `stats` / `reload` / `reload-cnip` / `update-cnip`：经 socket 单命令发送。
+- `stop` / `status` / `stats` / `reload` / `reload-cnip` / `update-cnip` / `cnip on|off|status`：经 socket 单命令发送。
   `update-cnip`（v1.4.1）：手动触发 CNIP 更新（daemon 走"下载 url_v4/v6 + 重灌"后台路径，ctl 立即回
   "已安排"，进度看 splitd.log）——区别于 `reload-cnip`（只重读本地文件）。
 - `list-rules`（v1.2.2）：经 socket 发送，逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表展示/删除用。
@@ -38,6 +38,10 @@
    立即退出也会如实报告（此前一律打印"已启动"，静默失败难排查）。已知缺口只剩：无 pid 文件
    （`pgrep splitd` 兜底）。
 4. socket 路径、`/etc/split/split.yaml`、`/usr/local/bin/splitd` 默认值与 daemon.h/daemon.c 的默认值**必须一致**（目前硬编码三处）。
+
+## CNIP 临时开关（v1.4.9）
+- `splitctl cnip on|off|status` 仅接受三个白名单参数，经 daemon 单命令 socket 执行；`ERR` 仍映射为非零退出码。
+- 开关不写配置文件，重启 splitd 恢复开启；WebUI 通过同一 action/ctl 命令调用。
 
 ## 验证
 - Linux 冒烟：`splitctl start` → `splitctl status/stats` → `splitctl stop`；`splitctl validate -c configs/split.yaml`。

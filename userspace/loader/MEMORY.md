@@ -7,7 +7,7 @@
 - `split_load(ctx, obj_path)`：open → find `split_classify` → load → 绑定 **11 个 map 句柄**（v1.4.0 起：v1.1.5 的 15 个 - 域名分流 4 个）。
 - `split_attach_iface / split_detach_iface / split_detach_all`：tc 挂载管理。
 - `map_set_tun / map_get_tun / map_set_cfg / map_skip_uid_add|del / map_rule_add_cidr / map_cnip_add_cidr / map_rule_clear / map_cnip_clear / map_stats_dump`。
-  - **`map_set_cfg`（v1.2.0）签名改为 `(ctx, default_verdict, ipv6_on, skip_uid_on)`**：
+  - **`map_set_cfg`（v1.2.0，v1.4.9 增加 cnip_on）签名为 `(ctx, default_verdict, ipv6_on, skip_uid_on, cnip_on)`**：
     新增 `skip_uid_on` 短路 flag，供内核热路径跳过空 map 的查表
     （对应 `split_cfg.skip_uid_enabled`）。**唯一调用方 rule.c 必须同步传值。**
     **v1.4.0：移除 `dom_on` 参数**（域名分流整模块删除，见 kernel/bpf/MEMORY 第 19 条）。
@@ -148,6 +148,10 @@
 
 ## 已知缺口
 - 无 pinning（`SPLIT_PIN_NS` 仅常量未用）；无 map 类型/大小自检。
+
+## CNIP 临时开关（v1.4.9）
+- `map_set_cfg(ctx, default_verdict, ipv6_on, skip_uid_on, cnip_on)` 继续是 map_cfg 的唯一写入口；`cnip_on` 只改策略 flag，不新增 map。
+- daemon 的 `cnip on|off` 用当前完整配置调用该接口，写成功后才更新进程状态；CNIP map 的清空/灌入/定时更新不受开关影响。
 
 ## 验证
 - `make -C userspace`；挂载冒烟见 tests/integration.sh（需 Linux root）。

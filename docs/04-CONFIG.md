@@ -84,7 +84,7 @@ cnip:
   auto_update_hours: 24       # 0=不自动更新；默认 24(每天)
 ```
 
-> linux 桌面请改成自己的绝对路径（如 /etc/split/cn_cidr_v4.txt）。
+> `cnip on|off|status` 是**临时运行时开关**，不写入本配置文件：`off` 时跳过 CNIP 命中直连这一步，目的地址继续按 `default.verdict` 判定；CNIP map 仍会按启动、`reload-cnip`、`update-cnip` 和定时任务正常刷新。普通 `splitctl reload` 保留当前临时状态，重启 splitd 后恢复 `on`。
 > 两个 path 都留空 = 纯规则分流（不做 CNIP）。
 > **`auto_update_hours` 非法值/留空（v1.4.7 起）** → WARN 并保留默认 24，仅跳过该行继续解析——此前
 > 非法值用 `break` 误跳出整个解析循环，会静默丢弃其后所有配置行（含 `path_v6`/整个 `rules` 节）
@@ -125,7 +125,7 @@ IPv6:  ::1/128（回环）  fe80::/10（链路本地）  ff00::/8（组播）
 | rules.direct_cidr4/6 | map_rule_direct4/6 |
 | rules.skip_uid | map_skip_uid |
 | cnip.path_v4/6 | map_cnip4/6 |
-| default.verdict / default.ipv6 | map_cfg[0]（default_verdict / ipv6_classify） |
+| default.verdict / default.ipv6 / `cnip on|off` | map_cfg[0]（default_verdict / ipv6_classify / cnip_enabled） |
 | tun_device | map_tun[0]（启动时解析；运行期由 daemon `tun_sync` 持续对齐——mihomo 重建 utun（含重载配置文件）导致 ifindex 漂移/改名时自动重写，接口消失时置 0 放行保联网，见 docs/02 §2.4） |
 
 ## 8. 热重载

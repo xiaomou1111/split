@@ -17,7 +17,8 @@ static void rule_add_list(struct split_bpf_ctx *ctx,
     }
 }
 
-int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
+int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg,
+                   bool cnip_on)
 {
     /* 先清空（幂等：remove 配置中已移除的旧项），再全量写入
      * 审查（2026-08 P2）：清空失败必须显式报错——map 处于"半清空"状态时，下面
@@ -40,7 +41,7 @@ int rule_apply_all(struct split_bpf_ctx *ctx, const struct split_config *cfg)
      * 内核会把它当"未初始化"回落到 TUN 安全默认（见 policy.h），但若用户配置
      * 的 default_verdict 就是 direct，静默回落会改变分流语义——显式报错便于排查。 */
     if (map_set_cfg(ctx, cfg->default_verdict, cfg->ipv6_classify ? true : false,
-                    cfg->nskip_uid > 0) != 0)
+                    cfg->nskip_uid > 0, cnip_on) != 0)
         LOG_ERRORF("map_cfg 写入失败(%s)，内核按 TUN 安全默认运行（default_verdict=%s）",
                    strerror(errno), cfg->default_verdict ? "tun" : "direct");
 

@@ -49,7 +49,9 @@
 
 CN 流量（如百度）路径：
 ```
-包头 dst = 220.181.*(百度, CNIP) → tc egress 判定 DIRECT → TC_ACT_OK
+包头 dst = 220.181.*(百度, CNIP) → `cnip=on` 时 tc egress 判定 DIRECT → TC_ACT_OK
+
+> `splitctl cnip off` 会临时跳过 CNIP 这一步，百度等地址随后按 `default.verdict` 裁决；CNIP map 仍继续更新，重启 splitd 恢复开启。
 → 原样从 wlan0 发出，从头到尾没有经过 mihomo，延迟=直连。
 ```
 
@@ -99,7 +101,7 @@ CN 流量（如百度）路径：
 | key | 含义 | 期望速查 |
 |-----|------|----------|
 | 0 STAT_TOTAL | 进入 eBPF 的包总数 | >0 |
-| 1 STAT_DIRECT_CN | CNIP 命中直连 | curl 百度后 +1 |
+| 1 STAT_DIRECT_CN | CNIP 命中直连（仅 `cnip=on`） | curl 百度后 +1 |
 | 2 STAT_DIRECT_RULE | 直连判定类（内置本地∪direct 规则∪默认直连共用，v1.4.6 语义澄清） | 内网/本地流量 +1 |
 | 3 STAT_PROXY | 进代理（proxy 规则/默认） | curl 海外后 +1 |
 | 4 STAT_SKIP_UID | 白名单跳过 | mihomo 自己发包 |

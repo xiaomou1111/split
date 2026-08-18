@@ -5,7 +5,7 @@
  * 本文件只做展示与组装参数，不透传任意 shell。
  *
  * 特性：
- *  - 状态页：运行状态卡（eBPF 程序 / 挂载网卡 / TUN ifindex / CNIP 计数 / 路由接管 /
+ *  - 状态页：运行状态卡（eBPF 程序 / 挂载网卡 / TUN ifindex / CNIP 计数 / CNIP 临时开关 / 路由接管 /
  *    splitd PID / 存活守护 / 运行时长 + WARN 行）；mihomo 卡；环境信息卡；stats 增量
  *    速率与异常着色；仅状态面板激活时每 5s 轮询（含 env）。
  *  - 规则页：在线规则（map 实况）按 proxy/direct 计数展示与增删。
@@ -84,11 +84,15 @@ async function loadStatus() {
   const tun = (body.match(/tun=(\d+)/) || [])[1];
   const cnip4 = (body.match(/cnip4=(\d+)/) || [])[1];
   const cnip6 = (body.match(/cnip6=(\d+)/) || [])[1];
+  const cnipMode = (body.match(/cnip=(on|off)/) || [])[1];
   const hijack = (body.match(/hijack=(-?\d+)/) || [])[1];
   setStatusDot((progfd && progfd !== '-1') || /^OK/.test(body) ? 'on' : 'off');
   $('st-progfd').textContent = progfd || '—';
   $('st-attached').textContent = (attached === undefined) ? '—' : attached;
   $('st-cnip').textContent = (cnip4 === undefined) ? '—' : `${cnip4}/${cnip6}`;
+  const cnipEl = $('st-cnip-mode');
+  cnipEl.textContent = cnipMode === 'on' ? '启用' : (cnipMode === 'off' ? '已绕过（临时）' : '—');
+  cnipEl.className = 'v' + (cnipMode === 'off' ? ' v-warn' : '');
   const tunEl = $('st-tun');
   if (tun === '0') {
     tunEl.textContent = '0（缺失，流量放行）';
@@ -475,6 +479,8 @@ function bindActions() {
   btnHit($('act-reload'));
   btnHit($('act-reload-cnip'));
   btnHit($('act-update-cnip'));
+  btnHit($('act-cnip-on'));
+  btnHit($('act-cnip-off'));
 
   const btnMihomo = (b, okMsg) => b.addEventListener('click', async () => {
     const r = await callApi(b.dataset.cmd);

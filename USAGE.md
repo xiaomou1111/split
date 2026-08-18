@@ -1,6 +1,6 @@
 ﻿# eBPF-Split 使用说明书
 
-> 版本 v1.4.8 ｜ 面向：想在 Linux / Android 真机上用起来的人
+> 版本 v1.4.9 ｜ 面向：想在 Linux / Android 真机上用起来的人
 > 目标读者：能看懂 shell 命令、会 root 的普通用户。代码细节见 `docs/`。
 
 ---
@@ -206,7 +206,7 @@ cnip:
 3. 内置本地段(回环/链路/组播) → 直连
 4. proxy 规则段            → 代理
 5. direct 规则段           → 直连
-6. CNIP(4/6)              → 直连
+6. CNIP(4/6)              → 直连（`cnip on`；`cnip off` 跳过本步，落到默认 verdict）
 7. 其余                    → default.verdict
 ```
 
@@ -221,12 +221,13 @@ cnip:
 ```bash
 splitctl start [-c cfg] [-s path] [-b bpfobj] [-d]    # 启动 splitd（-s=splitd 路径，-d=debug）
 splitctl stop                        # 停止
-splitctl status                      # 状态（prog_fd/attached/tun/cnip4/cnip6/hijack + WARN 行）
+splitctl status                      # 状态（prog_fd/attached/tun/cnip4/cnip6/cnip 开关/hijack + WARN 行）
 splitctl stats                       # 内核计数
 splitctl list-rules                  # 当前在线规则（proxy/direct 行，v1.2.2）
 splitctl reload                      # 重载配置（增量写 map）
 splitctl reload-cnip                 # 只刷新 CNIP（重读本地文件重灌）
 splitctl update-cnip                 # 手动更新 CNIP（重新下载 url_v4/v6 后重灌，后台执行；需同族配齐 url+path，v1.4.7 起缺任一回 ERR）
+splitctl cnip on|off|status          # 临时开启/绕过 CNIP 策略查询（重启 splitd 后恢复开启）
 splitctl add-rule <cidr> [direct|proxy]   # 在线加规则
 splitctl del-rule <cidr> [direct|proxy]   # 在线删规则
 splitctl validate -c cfg             # 只校验配置
@@ -236,7 +237,7 @@ splitctl validate -c cfg             # 只校验配置
 > 记录在 daemon 内存里并重放——`splitctl reload` 后仍生效（不再被配置重写冲掉）。但**重启 splitd
 > （或 daemon 退出）即丢失**，仍未持久化到配置文件；要长期生效请写进 `config.yaml` 的 rules 节。
 
-**status 字段（v1.1.3 起）**：`OK prog_fd=<n> attached=<n> tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>`，
+**status 字段（v1.1.3 起）**：`OK prog_fd=<n> attached=<n> tun=<ifindex> cnip4=<n> cnip6=<n> cnip=<on|off> hijack=<0|1|-1>`，
 后面可能跟 `WARN ...` 行。**看到 WARN 就是分流未生效，先修再走**：
 
 | 字段 | 含义 | 期望 |
@@ -245,6 +246,7 @@ splitctl validate -c cfg             # 只校验配置
 | attached | 已挂载网卡数 | >0 |
 | tun | tun 设备 ifindex | = utun 的 ifindex |
 | cnip4/cnip6 | CNIP map 条目数 | 数千条；**0 = 文件缺失/未导入**（放 cn_cidr_v4.txt 后 reload-cnip；配了 url 会自动补拉一次） |
+| cnip | CNIP 策略开关 | `on` 才执行 CNIP 命中直连；`off` 时跳过该步、按默认 verdict，map 仍继续刷新；仅当前 daemon 有效 |
 | hijack | 路由是否被 mihomo auto-route 接管 | **必须 0**；1 = mihomo 接管路由 → eBPF 失明（direct_cn 恒 0），把 mihomo tun.auto-route 改 false 重启 |
 
 **stats 字段含义**：

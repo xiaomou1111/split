@@ -4,7 +4,7 @@
 
 ## 接口契约
 - `RULE_PROXY=0`、`RULE_DIRECT=1`（`which` 参数语义）。
-- `rule_apply_all(ctx, cfg)`：uid 覆盖式写入 + 规则 list 写入 + `map_set_cfg`。
+- `rule_apply_all(ctx, cfg, cnip_on)`：uid 覆盖式写入 + 规则 list 写入 + `map_set_cfg`；`cnip_on` 为当前 daemon 临时策略开关。
 - `rule_add(ctx, cidr, which)` / `rule_del(ctx, cidr, which)`：单条增删（cli add-rule/del-rule 目标）。
 
 ## 关键决策与坑
@@ -39,6 +39,10 @@
 ## 与本仓库其它模块的关系
 - 依赖 loader 的 `map_skip_uid_add / map_rule_add_cidr / map_set_cfg`。
 - 被 daemon（启动+reload+**ctl add-rule/del-rule**）和 cli（add-rule/del-rule）调用。
+
+## CNIP 临时开关（v1.4.9）
+- `rule_apply_all(ctx, cfg, cnip_on)` 在启动/reload 重写 map_cfg 时传入 daemon 当前进程级开关；普通 reload 不得把 `cnip off` 重置为 on。
+- 规则 map 的清空/重放与 CNIP 开关独立，proxy/direct 规则优先级不变。
 
 ## 验证
 - `make -C userspace` 后 `splitctl reload` → `splitctl stats` 看 proxy/direct 计数变化（需 Linux）。

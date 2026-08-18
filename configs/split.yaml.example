@@ -50,6 +50,8 @@ rules:
 # 注意：建议用绝对路径（避免 splitd 工作目录歧义）。
 # Android 上可直接复用 box 模块的 cn.zone：cp /data/adb/box/run/cn.zone config/cn_cidr_v4.txt
 cnip:
+  # 临时绕过 CNIP 策略查询：splitctl cnip off；恢复：splitctl cnip on。
+  # 该开关不写入配置，map 仍会继续加载/更新，splitd 重启后默认开启。
   path_v4: /data/adb/split/config/cn_cidr_v4.txt
   path_v6: /data/adb/split/config/cn_cidr_v6.txt
   # 自动更新：daemon 每 auto_update_hours 用下载器下载 url_v4/v6 覆盖到 path_v4/v6 后重灌 map。

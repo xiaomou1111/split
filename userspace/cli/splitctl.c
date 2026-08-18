@@ -236,6 +236,7 @@ static void usage(const char *prog)
         "  reload                      重读配置并应用\n"
         "  reload-cnip                 只刷新 CNIP（重读本地文件重灌）\n"
         "  update-cnip                 手动更新 CNIP（下载 url_v4/v6 后重灌）\n"
+        "  cnip       <on|off|status>  临时开启/绕过 CNIP 分流（重启后恢复开启）\n"
         "  add-rule  <cidr> [direct|proxy]\n"
         "  del-rule  <cidr> [direct|proxy]\n"
         "  validate -c cfg             仅校验配置\n", prog);
@@ -301,6 +302,22 @@ int main(int argc, char **argv)
         return send_cmd("reload-cnip");
     if (strcmp(argv[optind], "update-cnip") == 0)
         return send_cmd("update-cnip");
+    if (strcmp(argv[optind], "cnip") == 0) {
+        char cmd[64];
+
+        if (optind + 1 >= argc || optind + 2 != argc ||
+            (strcmp(argv[optind + 1], "on") != 0 &&
+             strcmp(argv[optind + 1], "off") != 0 &&
+             strcmp(argv[optind + 1], "status") != 0)) {
+            fprintf(stderr, "用法: cnip on|off|status\n");
+            return 1;
+        }
+        if (snprintf(cmd, sizeof(cmd), "cnip %s", argv[optind + 1]) >= (int)sizeof(cmd)) {
+            fprintf(stderr, "cnip: 参数过长\n");
+            return 1;
+        }
+        return send_cmd(cmd);
+    }
     if (strcmp(argv[optind], "add-rule") == 0) {
         if (optind + 1 >= argc) {
             fprintf(stderr, "add-rule <cidr> [proxy|direct]\n");

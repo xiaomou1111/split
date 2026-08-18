@@ -158,10 +158,10 @@ sepolicy.rule` 骨架；`scripts/gen-magisk.sh` 打包 zip。
    ip tuntap add dev tun0 mode tun && ip link set tun0 up
    export SPLIT_SOCKET=/data/adb/split/run/splitd.sock
    splitd -d -c split.yaml -b split.bpf.o &
-   splitctl status   # → OK prog_fd=.. attached=N tun=16 cnip4=4145 cnip6=1235 hijack=0
+   splitctl status   # → OK prog_fd=.. attached=N tun=16 cnip4=4145 cnip6=1235 cnip=on hijack=0
    splitctl stats    # 看 direct_cn/proxy 计数
    ```
-   > **v1.1.3 起 status 带健康字段**：`cnip4/cnip6` 为 0 = CNIP 未导入（文件缺失，配了 url 会自动补拉，失败每 5 分钟重试直到成功——仅成功后才停止补拉）；
+   > **v1.1.3 起 status 带健康字段**：`cnip4/cnip6` 为 0 = CNIP 未导入（文件缺失，配了 url 会自动补拉，失败每 5 分钟重试直到成功——仅成功后才停止补拉）；关闭 CNIP 策略时可执行 `splitctl cnip off` 临时绕过 CNIP 命中直连，map 仍继续刷新，重启 splitd 后恢复 `cnip=on`。
    > `hijack=1` = 路由被 mihomo auto-route 接管，eBPF 分流已失效（见 8.6 的坑）；后续可能有 `WARN` 行。
 4. 端到端分流实测：内网/CNIP → 直连（`direct_cn`），海外 → redirect 进 tun（`proxy` 计数 + ping loss），
    `add-rule <cidr> direct` 可即时让海外变直连，`del-rule` 可撤销。

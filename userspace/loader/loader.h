@@ -56,7 +56,7 @@ int map_rawip_sync(struct split_bpf_ctx *ctx, int ifindex,
 int map_set_tun(struct split_bpf_ctx *ctx, int ifindex);
 int map_get_tun(struct split_bpf_ctx *ctx, uint32_t *ifindex);
 int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on,
-                bool skip_uid_on);
+                bool skip_uid_on, bool cnip_on);
 int map_skip_uid_add(struct split_bpf_ctx *ctx, uint32_t uid);
 int map_skip_uid_del(struct split_bpf_ctx *ctx, uint32_t uid);
 /* cidr: "A.B.C.D/N" 或 "xxxx:xxxx::/N"，写入 rule map（which=RULE_PROXY/DIRECT） */

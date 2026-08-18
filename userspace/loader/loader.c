@@ -397,7 +397,7 @@ int map_get_tun(struct split_bpf_ctx *ctx, uint32_t *ifindex)
 }
 
 int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on,
-                bool skip_uid_on)
+                bool skip_uid_on, bool cnip_on)
 {
     uint32_t zero = 0;
     struct split_cfg cfg = {
@@ -409,6 +409,7 @@ int map_set_cfg(struct split_bpf_ctx *ctx, uint8_t default_verdict, bool ipv6_on
         .bpf_trace_enabled = 1,
         .ipv6_classify = ipv6_on ? 1 : 0,
         .skip_uid_enabled = skip_uid_on ? 1 : 0,
+        .cnip_enabled = cnip_on ? 1 : 0,
     };
 
     return bpf_map__update_elem(ctx->m_cfg, &zero, sizeof(zero),

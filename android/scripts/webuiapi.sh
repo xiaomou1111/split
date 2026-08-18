@@ -15,6 +15,7 @@
 #   reload                 → splitctl reload
 #   reload-cnip            → splitctl reload-cnip（重读本地文件重灌）
 #   update-cnip            → splitctl update-cnip（下载 url_v4/v6 后重灌，后台执行）
+#   cnip <on|off|status>   → 临时开启/绕过 CNIP 策略查询（白名单参数）
 #   mihomo-status          → mihomo 运行状态（status=running/stopped + pid + ver + log）
 #   mihomo-start           → 启动随包 mihomo（tun 契约对齐后起）
 #   mihomo-stop            → 停止 mihomo
@@ -219,6 +220,16 @@ case "$ACTION" in
   reload)     run reload ;;
   reload-cnip) run reload-cnip ;;
   update-cnip) run update-cnip ;;
+  cnip)
+    if [ -n "$3" ]; then
+      echo "ERR: 用法 cnip on|off|status"
+      exit 1
+    fi
+    case "$2" in
+      on|off|status) run cnip "$2" ;;
+      *) echo "ERR: 用法 cnip on|off|status"; exit 1 ;;
+    esac
+    ;;
   env)
     # 环境信息（WebUI 状态页"环境信息"卡 + 排障对照 docs/03-ANDROID.md）。
     # 全走系统只读命令，不经 ctl socket——splitd 未运行时也能展示。

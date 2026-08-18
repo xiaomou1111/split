@@ -171,6 +171,10 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 ## app/（预留）
 - 仅 README；无 UI 无启动器（roadmap：原生 app / shell 快捷方式）。
 
+## CNIP 临时分流开关（v1.4.9）
+- WebUI“开关”页的 `启用 CNIP 分流`/`绕过 CNIP 分流` 通过 `webuiapi.sh cnip on|off` 调用 splitctl；后端只允许 `on|off|status`，不透传任意参数。
+- 状态页解析 daemon status 的 `cnip=on|off`；关闭仅绕过策略查询，map 仍刷新，重启 splitd 后恢复开启。配置编辑器不保存该临时状态。
+
 ## KernelSU WebUI（webroot/ + webuiapi.sh）
 - **前端**：`magisk/webroot/`（`index.html` + `app.js` + `style.css` + `kernelsu.js`）。
   KernelSU 识别模块含 `webroot/index.html` 即启用 WebUI（KernelSU Manager 的 WebView 提供）。
@@ -181,7 +185,7 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 - **后端**：`scripts/webuiapi.sh`（经 `ksu.exec` 以 root 调 `/data/adb/split/scripts/webuiapi.sh <action>`）。
   为什么放 scripts/ 而非 webroot/：webroot 由 KernelSU 设定为网页服务上下文，脚本放运行期目录
   `/data/adb/split/scripts/` 与既有 start/stop 一致，也避开执行权限歧义。
-- **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/**update-cnip（v1.4.1）**/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
+- **动作白名单**：status/stats/**list-rules（v1.2.2）**/**version（v1.2.2）**/start/stop/reload/reload-cnip/**update-cnip（v1.4.1）**/**cnip on|off|status（v1.4.9）**/add-rule/del-rule/get-config/save-config/validate-config/**get-log <splitd|mihomo> [n]**（v1.1.5）/mihomo-status/mihomo-start/mihomo-stop/**env（WebUI 完善）**。
   行数 n 走整型白名单（非纯数字回退 200，**v1.4.8 钳制上限 5000**——防超大日志 tail 全文件打爆
   WebView），`tail` → `busybox tail` → `cat` 兜底；日志尾按行截断避免打爆 WebView。
   action 由 case 分支映射，**不透传任意 shell **；参数经 shell 引号包裹（单引号 CIDR）防注入。

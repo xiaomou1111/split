@@ -35,6 +35,7 @@
           <span class="k">已挂载网卡</span><span class="v mono" id="st-attached">—</span>
           <span class="k">TUN ifindex</span><span class="v mono" id="st-tun">—</span>
           <span class="k">CNIP v4/v6</span><span class="v mono" id="st-cnip">—</span>
+          <span class="k">CNIP 分流</span><span class="v" id="st-cnip-mode">—</span>
           <span class="k">路由接管</span><span class="v" id="st-hijack">—</span>
           <span class="k">splitd PID</span><span class="v mono" id="st-pid">—</span>
           <span class="k">存活守护</span><span class="v" id="st-watchdog">—</span>
@@ -154,13 +155,16 @@
         <button class="btn" id="act-reload" data-cmd="reload">reload</button>
         <button class="btn" id="act-reload-cnip" data-cmd="reload-cnip">reload-cnip</button>
         <button class="btn" id="act-update-cnip" data-cmd="update-cnip" data-msg="已安排 CNIP 更新（后台下载）">更新 CNIP</button>
+        <button class="btn primary" id="act-cnip-on" data-cmd="cnip on">启用 CNIP 分流</button>
+        <button class="btn" id="act-cnip-off" data-cmd="cnip off">绕过 CNIP 分流</button>
       </div>
       <p class="hint">
         停止命令走 daemon socket 的 <code>stop</code>；启动会派生 <code>splitd</code>。
         切换 <code>verdict / ipv6 / skip_uid</code> 等在"参数"页改配置后保存即可。
         <code>reload-cnip</code> 只重读本地 CNIP 文件；<code>更新 CNIP</code> 会从
         <code>cnip.url_v4/url_v6</code> 重新下载后重灌（需配置了 url，下载在后台，
-        进度见 splitd.log，完成后上方 CNIP 计数自动更新）。
+        进度见 splitd.log，完成后上方 CNIP 计数自动更新）。CNIP 分流按钮仅临时改变
+        当前进程的策略，重启 splitd 后恢复开启；关闭时 CNIP 数据仍会继续刷新。
       </p>
     </div>
     <div class="card">

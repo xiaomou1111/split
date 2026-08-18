@@ -247,7 +247,7 @@ static int ctl_reply(int c, const char *fmt, ...)
     return 0;
 }
 
-static void ctl_status(int c, struct split_bpf_ctx *ctx)
+static void ctl_status(int c, struct split_bpf_ctx *ctx, int cnip_enabled)
 {
     uint32_t n4 = 0, n6 = 0;
     uint32_t tun_u = 0;
@@ -270,9 +270,10 @@ static void ctl_status(int c, struct split_bpf_ctx *ctx)
     /* v1.2.8：读主循环 HIJACK_CHECK_MS 节流缓存的路由接管检测结果，不在 ctl 路径同步重跑
      * netlink dump（最多 4×2s 阻塞）。hijack_now 含 -1=检测失败（如实显示）。 */
     hijack = g_hijack_now;
-    ctl_reply(c, "OK prog_fd=%d attached=%d tun=%d cnip4=%u cnip6=%u hijack=%d",
-              ctx->prog_fd, ctx->nattached, tun, n4, n6, hijack);
-    if (n4 == 0 && n6 == 0)
+    ctl_reply(c, "OK prog_fd=%d attached=%d tun=%d cnip4=%u cnip6=%u cnip=%s hijack=%d",
+              ctx->prog_fd, ctx->nattached, tun, n4, n6,
+              cnip_enabled ? "on" : "off", hijack);
+    if (cnip_enabled && n4 == 0 && n6 == 0)
         ctl_reply(c, "WARN CNIP 未导入（0 条）：检查 config/cn_cidr_v4.txt 或 reload-cnip");
     if (hijack == 1)
         ctl_reply(c, "WARN 路由被 mihomo auto-route 接管：eBPF 分流失效，请把 mihomo tun.auto-route 改为 false");
@@ -362,6 +363,7 @@ static int ctl_rule_line(int which, const char *cidr, void *priv)
 static int ctl_serve(struct split_bpf_ctx *ctx,
                      const char *cfg_path,
                      struct split_config *cfg,
+                     int *cnip_enabled,
                      long long *cnip_next_ms,
                      struct rule_overrides *rov,
                      int *tun_fail_cnt,
@@ -448,7 +450,7 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
     if (cmd_is(cmd, "stats")) {
         ctl_stats(c, ctx);
     } else if (cmd_is(cmd, "status")) {
-        ctl_status(c, ctx);
+        ctl_status(c, ctx, *cnip_enabled);
     } else if (cmd_is(cmd, "list-rules")) {
         /* v1.2.2：当前在线规则（配置基线 + 运行时 add-rule/del-rule 的 map 实况），
          * 逐行 "proxy <cidr>" / "direct <cidr>"，供 WebUI 规则列表展示/删除。 */
@@ -458,6 +460,32 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         map_rule_foreach(ctx, RULE_PROXY, ctl_rule_line, &priv);
         map_rule_foreach(ctx, RULE_DIRECT, ctl_rule_line, &priv);
         ctl_reply(c, "END");
+    } else if (cmd_is(cmd, "cnip")) {
+        char *arg = cmd + strlen("cnip");
+
+        while (*arg == ' ' || *arg == '\t')
+            arg++;
+        if (strcmp(arg, "status") == 0) {
+            ctl_reply(c, "OK cnip=%s", *cnip_enabled ? "on" : "off");
+            ctl_reply(c, "END");
+        } else if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+            int next = (strcmp(arg, "on") == 0);
+
+            if (map_set_cfg(ctx, cfg->default_verdict,
+                            cfg->ipv6_classify ? true : false,
+                            cfg->nskip_uid > 0, next ? true : false) != 0) {
+                ctl_reply(c, "ERR CNIP 开关写入失败: %s", strerror(errno));
+                ctl_reply(c, "END");
+            } else {
+                *cnip_enabled = next;
+                LOG_INFOF("CNIP 分流临时开关: %s", next ? "on" : "off");
+                ctl_reply(c, "OK CNIP 分流已%s", next ? "开启" : "绕过");
+                ctl_reply(c, "END");
+            }
+        } else {
+            ctl_reply(c, "ERR 用法: cnip on|off|status");
+            ctl_reply(c, "END");
+        }
     } else if (cmd_is(cmd, "reload-cnip")) {
         /* v1.4.1：改为后台重灌（与 update-cnip/定时更新统一走 fork 子进程）——
          * cnip_apply 是全量清空重灌（~6.5 万条 LPM 写入，数秒），同步跑会阻塞
@@ -521,7 +549,7 @@ static int ctl_serve(struct split_bpf_ctx *ctx,
         } else {
             LOG_ERRORF("reload: 重读 %s 失败，沿用内存配置", cfg_path);
         }
-        rule_apply_all(ctx, cfg);
+        rule_apply_all(ctx, cfg, *cnip_enabled);
         /* v1.2.0（H1）：重放运行时 add-rule/del-rule 偏差——否则 CLI 增删的
          * 规则在 reload 后丢失（rule_apply_all 先 clear 再写配置基线）。 */
         rule_overrides_replay(ctx, rov);
@@ -874,6 +902,7 @@ static int tun_sync(struct split_bpf_ctx *ctx, const struct split_config *cfg,
 void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
 {
     struct split_config cfg;
+    int cnip_enabled = 1; /* 仅本次 daemon 进程有效，重启后默认恢复开启 */
     struct split_bpf_ctx ctx;
     int tun_index, lfd = -1, evfd = -1, lock_fd = 0;
     long long cnip_next_ms = 0;
@@ -934,7 +963,7 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
     g_tun_last_good = tun_index; /* v1.2.5：名字漂移兜底的 ifindex 基准 */
 
     /* 3. 规则 + uid + cnip */
-    rule_apply_all(&ctx, &cfg);
+    rule_apply_all(&ctx, &cfg, cnip_enabled);
     if (cfg.cnip4_path[0] || cfg.cnip6_path[0])
         cnip_apply(&ctx, &cfg);
     if (cfg.cnip_auto_update_hours > 0)
@@ -1196,7 +1225,8 @@ void daemon_loop(const char *cfg_path, const char *bpf_obj, int debug)
             if (lfd_idx >= 0 && (fds[lfd_idx].revents & POLLIN)) {
                 int c = accept(lfd, NULL, NULL);
                 if (c >= 0) {
-                    ctl_serve(&ctx, cfg_path, &cfg, &cnip_next_ms, &rov,
+                    ctl_serve(&ctx, cfg_path, &cfg, &cnip_enabled,
+                              &cnip_next_ms, &rov,
                               &tun_fail_cnt, c);
                     close(c);
                 }

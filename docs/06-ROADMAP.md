@@ -94,7 +94,12 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.8（当前）        2026-08-15 模块脚本审查批（行为：fix-mihomo-tun.sh 强制 tun.enable:true
+v1.4.9（当前）        2026-08-18 CNIP 临时绕过开关：新增 `splitctl cnip on|off|status` 与
+                        KernelSU WebUI 控制；`off` 仅跳过 BPF policy 第 6 步 CNIP LPM 查询、
+                        后续按 default verdict 裁决，CNIP map 仍继续启动导入/后台刷新，普通
+                        reload 保留状态、重启 splitd 恢复 on；map_cfg ABI 尾部追加 cnip_enabled，
+                        status 增 `cnip=on|off` 供 WebUI 解析
+v1.4.8        2026-08-15 模块脚本审查批（行为：fix-mihomo-tun.sh 强制 tun.enable:true
                         段内限域 + setup-box-tun.sh 去冗余内联 sed + customize.sh 升级清 mihomo
                         版本缓存 + webuiapi.sh get_log 上限；详见当次提交）
 v1.4.7        2026-08-15 审查剩余 P2 修复批（5 项真 P2 + 1 项连带，详见当次提交）：

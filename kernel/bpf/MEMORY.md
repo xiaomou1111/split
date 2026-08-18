@@ -142,6 +142,10 @@
 - TUN 剥头问题已在 WSL2 实测验证为"自动剥头"，无需处理；Android 真机仍需最终确认。
 - **tproxy 模式（v1.0.2 研究+实测，已否定）**：`tproxy` 目标内核只允许挂在 `NF_INET_PRE_ROUTING` 链（小米 GKI `nft_tproxy.c:301` `nft_chain_validate_hooks(ctx->chain, 1 << NF_INET_PRE_ROUTING)`），**不支持 OUTPUT/本机出站方向**。WSL2 6.18 实测 output hook 添加 tproxy → `Operation not supported`。即使 eBPF 在 egress 打 mark，也没有 netfilter 目标能把本机出站流量转给 mihomo。**结论：tproxy 模式不可行，保持 TUN 主线。** 详见 docs/06 "tproxy 模式"节。
 
+## CNIP 临时绕过开关（v1.4.9）
+- `struct split_cfg.cnip_enabled` 是 map_cfg 的运行时 flag，`1` 执行第 6 步 CNIP LPM 命中直连，`0` 跳过该步并落到 default verdict；UID/v6/local/proxy/direct 顺序不变。
+- `policy_judge` 的未初始化 fallback 必须显式设 `cnip_enabled=1`，否则 map_cfg 写失败时会意外改变既有 CNIP 语义；CNIP map 内容仍由用户态正常刷新。
+
 ## 验证
 - 编译：`make -C kernel bpf`（需 Linux + clang>=12）。
 - 冒烟：`make -C kernel validate`（需 root/bpffs）。

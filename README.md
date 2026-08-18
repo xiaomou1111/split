@@ -1,6 +1,6 @@
 # eBPF-Split — 内核级 CNIP 分流流量转发框架
 
-> v1.4.8 ｜ 用 eBPF 在**内核**完成"去往中国大陆的流量直连、海外流量进代理"的分流，
+> v1.4.9 ｜ 用 eBPF 在**内核**完成"去往中国大陆的流量直连、海外流量进代理"的分流，
 > 再把需要代理的流量转发给 **mihomo(Clash/Meta)** 等任意 TUN 代理内核。
 > 设计目标：**高可读、强模块化、安卓优先兼容**。
 
@@ -33,6 +33,9 @@
 
 原理动画一句话：**直连流量根本不进代理，只有"该代理的流"才在内核被拦下来塞进
 mihomo 的 TUN**——因此分流发生在内核侧，代理 CPU 压力极小、直连延迟隐断。
+
+> 运行期如需临时绕过 CNIP 直连判定，可执行 `splitctl cnip off`；流量会继续按
+> `default.verdict` 判定，CNIP 数据仍保持刷新。执行 `splitctl cnip on` 恢复，重启 splitd 后默认开启。
 
 ---
 
@@ -128,6 +131,7 @@ sudo ./userspace/build/splitctl start -c configs/split.yaml
 curl https://www.youtube.com     # 走代理
 curl https://www.baidu.com       # 直连（不经过 mihomo）
 ./userspace/build/splitctl stats # 内核计数
+./userspace/build/splitctl cnip off # 临时绕过 CNIP 分流；cnip on 恢复（重启后默认开启）
 ```
 
 > 安卓（Magisk/KernelSU/APatch）安装：`make android` 生成 `build/split-magisk-v{VERSION}.zip`（及 `build/split-ksu-v{VERSION}.zip` 别名），

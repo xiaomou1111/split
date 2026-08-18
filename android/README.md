@@ -1,6 +1,6 @@
 ﻿# 安卓兼容层（android/）
 
-本目录是 **eBPF-Split（v1.4.8）的安卓落地包**。核心逻辑与桌面 Linux 完全一致，
+本目录是 **eBPF-Split（v1.4.9）的安卓落地包**。核心逻辑与桌面 Linux 完全一致，
 这里解决的是安卓特有的三件事：
 
 1. **权限**：root（Magisk/KernelSU）+ SELinux 放行（sepolicy / magiskpolicy）
@@ -32,6 +32,7 @@ adb push build/split-magisk-v{VERSION}.zip /sdcard/
 # 4. 验证
 adb shell su -c "/data/adb/split/bin/splitctl status"
 adb shell su -c "/data/adb/split/bin/splitctl stats"
+adb shell su -c "/data/adb/split/bin/splitctl cnip off"     # 临时绕过 CNIP；cnip on 恢复
 ```
 
 > KernelSU / APatch 用户：模块同样可用，路径 `sepolicy.rule` 由 manager 自动注入。
@@ -64,7 +65,7 @@ android/
 
 安装后若用 **KernelSU / APatch**，模块详情页会显示 **WebUI** 入口（KernelSU Manager
 内置 WebView）：状态与 stats、在线规则列表与增删、编辑 split.yaml
-（校验后保存并 reload）、splitd/mihomo 开关、日志查看、版本号。Magisk 无 WebUI 机制，
+（校验后保存并 reload）、splitd/mihomo/CNIP 开关、日志查看、版本号。Magisk 无 WebUI 机制，
 这类用户仍走 adb/原生 App（见 android/app/README）。
 
 - 前端：`magisk/webroot/`（`index.html` + `app.js` + `style.css` + `kernelsu.js`，vendored npm `kernelsu`）。

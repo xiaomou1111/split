@@ -37,7 +37,7 @@
    命令协议不变（单命令一连接、回复后 close）。v1.0.6 起的"poll 一次 + read 一次"实现只对单次小 write 有效，
    勿回退。**发送方必须带 `'\n'` 终止**（splitctl send_cmd 已同步；协议契约，新增发送方必看）。
    **v1.1.6 加固：缓冲满仍未收到 '\n'（`truncated`）→ 直接回 `ERR 命令过长\nEND` 并 return**，不再按截断串解析——避免"收到半截规则"的歧义。
-- 命令：`stats` / `status` / `reload-cnip` / **`update-cnip`（v1.4.1）** / `reload` / `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]` / `stop` / **`list-rules`（v1.2.2）**；未知 → `ERR 未知命令`。
+- 命令：`stats` / `status` / `reload-cnip` / **`update-cnip`（v1.4.1）** / **`cnip on|off|status`（v1.4.9）** / `reload` / `add-rule <cidr> [proxy|direct]` / `del-rule <cidr> [proxy|direct]` / `stop` / **`list-rules`（v1.2.2）**；未知 → `ERR 未知命令`。
 - **`reload-cnip`（v1.4.1 起后台执行；v1.1.6 起防并发双写）**：只重读本地文件全量重灌
   （`cnip_apply`，"清空→写入"）。**v1.4.1（G1 统一调度）**：与 `update-cnip`/定时更新
   一样走 fork 子进程——ctl 分支校验（`g_cnip_busy` 忙拒绝 / 无 path 直接 OK）后置
@@ -61,7 +61,7 @@
   此前只查 `url`，url 有值而 path 为空的族在 `cnip_auto_update` 里本就 no-op（见下 v1.3.1），
   但 daemon 却回 `OK 已安排更新` 并按成功收尾——WebUI 上点"立即更新"看似成功实际什么都没下载。
   现与 boot_once/v1.3.1 补拉口径统一，误配族打 ERR 说明"同族 url+path 需成对"。
-- **`status`（v1.1.3 扩展 / v1.2.7 补 tun 缺失 WARN / v1.2.8 hijack 改缓存）**：`OK prog_fd=<n> attached=<n> tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>`；
+- **`status`（v1.1.3 扩展 / v1.2.7 补 tun 缺失 WARN / v1.2.8 hijack 改缓存）**：`OK prog_fd=<n> attached=<n> tun=<ifindex> cnip4=<n> cnip6=<n> cnip=<on|off> hijack=<0|1|-1>`；
   随后可能跟 `WARN ...` 行（CNIP 0 条未导入 / 路由被 mihomo auto-route 接管 / **tun 缺失
   （map_tun=0，v1.2.7 审查 H2：代理流量被放行直连的静默降级要可见）**）——机器可解析，
   人类一眼看出"分流是否真的生效"。WebUI app.js 解析这些字段（改格式必须同步 app.js）。
@@ -327,6 +327,10 @@
 - `tun_sync_last_ms` 初始 0 → 首轮循环即做首次兜底同步（v1.1.2 起不再依赖 2s poll 超时）。
 - `exit(2)`（BPF 加载失败）是**真实退出**不是降级——mihomo 若 auto-route:false 则无分流兜底；
   `android/magisk/service.sh` 通过 `splitctl status` 检测并打日志提示（改 exit code 必同步该脚本）。
+
+## CNIP 临时运行时开关（v1.4.9）
+- ctl 新增 `cnip on|off|status`，状态只存当前 daemon 进程；`off` 仅让 BPF 跳过 CNIP policy 第 6 步，CNIP map 启动导入、`reload-cnip`、`update-cnip`、定时更新仍照常执行。
+- `status` 首行新增 `cnip=on|off`；关闭时 map 条数仍代表缓存数据，0 条 WARN 只在开关开启时提示。普通 `reload` 传回当前 flag，重启后恢复开启。
 
 ## 验证
 - Linux: `splitd -c configs/split.yaml -d` → `splitctl status/stats` → `stop` 干净退出。

@@ -27,7 +27,7 @@ L4 平台胶水     android/magisk
   | map_rule_direct4/6 | LPM_TRIE | 同 | u8 | 强制直连段 |
   | map_skip_uid | HASH | u32 uid | u8 allow | uid 白名单（mihomo/root） |
   | map_tun | ARRAY(1) | u32 idx | u32 ifindex | 代理 tun 设备 ifindex（daemon 动态同步：mihomo 重建 utun 时 ifindex 漂移自动对齐；接口消失置 0 → BPF 侧放行保联网） |
-  | map_cfg | ARRAY(1) | u32 idx | struct split_cfg | 默认行为/IPv6/UID 开关（v1.2.0：skip_uid_enabled） |
+  | map_cfg | ARRAY(1) | u32 idx | struct split_cfg | 默认行为/IPv6/UID/CNIP 开关（v1.4.9：CNIP 临时绕过） |
   | map_rawip | HASH | u32 ifindex | u8 used | RAWIP 接口集合（v1.1.5：Android 蜂窝 rmnet_data*，ARPHRD_RAWIP=519，无以太网头；用户态挂载/网络事件时同步，内核据此跳过 L2 解析） |
   | map_stats | PERCPU_ARRAY | u32 类型 | u64 计数 | 观测 |
 
@@ -69,7 +69,7 @@ L4 平台胶水     android/magisk
   3. 内部/链路本地/多播(dst) → 直连
   4. policy_proxy 命中 → 代理
   5. policy_direct 命中 → 直连
-  6. CNIP(v4/v6) 命中 → 直连
+  6. CNIP(v4/v6) 命中 → 直连（`cnip on` 时；`cnip off` 跳过本步，继续默认判定）
   7. 其余 → cfg.default_verdict（默认=代理）
 - **实现要点**：顺序即优先级，可配；为可观测性，每次裁决写相邻 stats key。
 
@@ -103,7 +103,7 @@ L4 平台胶水     android/magisk
 
 ### 2.3 rule/
 - 维护 `map_rule_proxy* / direct* / skip_uid`：add/del/reload 子命令，配合配置文件字段。
-- 入口：`rule_apply_all(ctx, cfg)`；在线增删：`rule_add(ctx, cidr, which)` / `rule_del(ctx, cidr, which)`。
+- 入口：`rule_apply_all(ctx, cfg, cnip_on)`；在线增删：`rule_add(ctx, cidr, which)` / `rule_del(ctx, cidr, which)`。
 - **运行时规则追踪（v1.2.0）**：`add-rule/del-rule` 先写 map、成功后再 `rule_override_record`
   记录期望状态（跨 reload 重放，重启即丢）；**v1.2.9 审查加固：cidr ≥ CFG_STRLEN 显式拒绝记录**
   （此前 snprintf 截断存储，reload 重放会写截断串与运行时 map 不一致）。
@@ -147,12 +147,13 @@ L4 平台胶水     android/magisk
   精确匹配命中/设备缺失时清零恢复重新搜寻，漂移 WARN 仅首次对齐打一次。
 
 ### 2.5 cli/ splitctl
-- 子命令：`start stop status stats list-rules reload reload-cnip update-cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
+- 子命令：`start stop status stats list-rules reload reload-cnip update-cnip cnip add-rule del-rule validate`（`start`/`validate` 本地执行，其余经 socket 与 daemon 通信）。
+  `cnip on|off|status`：临时开启/绕过 CNIP 策略查询；只改 `map_cfg`，CNIP map 仍继续刷新，重启 splitd 后恢复开启。
   `update-cnip`（v1.4.1）：手动触发 CNIP 更新——与 `reload-cnip`（只重读本地文件）不同，会重新下载
   `cnip.url_v4/url_v6` 后全量重灌（复用定时自动更新的后台 fork 路径，ctl 立即回"已安排"；
   **v1.4.7 起需同族配齐 url+path 才动作**，未配齐回 ERR 点明、不再误报"已安排"）。
 - `list-rules`（v1.2.2）：逐行输出当前在线规则（`proxy <cidr>` / `direct <cidr>`，map 实况）——WebUI 规则列表用。
-- `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 30s（P2：10s→30s）自检路由接管，变化即打日志。
+- `status` 输出（v1.1.3 扩展 / v1.2.8 hijack 改缓存）：`OK prog_fd=.. attached=.. tun=<ifindex> cnip4=<n> cnip6=<n> cnip=<on|off> hijack=<0|1|-1>` + 可选的 `WARN` 行（CNIP 0 条 / 路由被 mihomo auto-route 接管 / **tun 缺失（v1.2.7）**）。daemon 每 30s（P2：10s→30s）自检路由接管，变化即打日志。
   **v1.2.8（审查修复）**：`hijack` 字段读主循环节流缓存的 `g_hijack_now`（含 -1=检测失败），
   不再在 ctl 路径同步重跑 netlink dump（最坏 4×2s 阻塞主循环的 ctl/网络事件/CNIP 调度）；
   status 至多 30s 陈旧。
