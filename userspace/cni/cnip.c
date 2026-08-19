@@ -418,11 +418,15 @@ static int cnip_fetch_to_path(struct split_bpf_ctx *ctx,
         return 0;
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     if (cnip_load_url(ctx, url, tmp, family) < 0) {
+        /* 审查（2026-08）：下载/校验失败会留下 <path>.tmp——坏文件在磁盘上
+         * 持续累积且可能被误当成已落盘正式文件。失败路径一律清掉临时文件。 */
         LOG_ERRORF("自动更新下载失败: %s -> %s", url, tmp);
+        unlink(tmp);
         return -1;
     }
     if (rename(tmp, path) < 0) {
         LOG_ERRORF("自动更新保存失败: %s (errno=%d)", path, errno);
+        unlink(tmp);
         return -1;
     }
     LOG_INFOF("CNIP 已刷新本地文件: %s", path);

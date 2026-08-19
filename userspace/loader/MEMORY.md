@@ -96,6 +96,10 @@
    `"/-1"` 静默收敛成 32。非法/负值/超 128 → 返回 -1 记 ERROR。合法 `/0` 与跨族 `/128`
    （v4 侧仍收敛 32）行为不变。
    **v1.1.3 补漏**：**空串（`"1.2.3.4/"`）同样拒绝**——`strtol("")==0` 同样会静默成为 /0。
+   **审查（2026-08）`map_rule_del_cidr` 对 `-ENOENT` 降级**：删除不存在的键（如 `del-rule` 一条
+   早已不在配置基线、仅存于运行时覆盖里的规则，`rule_overrides_replay` 的 present=0 分支）是合法
+   no-op——此前 `bpf_map__delete_elem` 返 `-ENOENT` 打 ERROR 刷日志误导"删除失败"。现 `-ENOENT`
+   记 DEBUG 并返回 0（幂等），仅其它真错误才 ERROR。
 8. `map_cnip_add_cidr` 失败返回 `-1` 但**不打印具体原因**；cnip.c 用返回值计数 ok/bad。
 9. `map_skip_uid_del` 用 `bpf_map__delete_elem(..., 0)`；HASH map 才支持 delete，LPM_TRIE 也支持（v1.0.1 新增 `map_rule_del_cidr`）。
 10. `map_stats_dump`：PERCPU_ARRAY 逐槽 `libbpf_num_possible_cpus()` 求和。

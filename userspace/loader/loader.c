@@ -812,6 +812,12 @@ int map_rule_del_cidr(struct split_bpf_ctx *ctx, const char *cidr, int which)
         memcpy(k6.addr, &a6, 16);
         err = bpf_map__delete_elem(m, &k6, sizeof(k6), 0);
     }
+    if (err == -ENOENT) {
+        /* 审查（2026-08）：删除不存在的键（如 del-rule 了一条早已不在基线、
+         * 仅存在于运行时覆盖里的规则）是合法 no-op，不该按 ERROR 刷日志。 */
+        LOG_DEBUGF("删除规则 %s 不存在（忽略）", cidr);
+        return 0;
+    }
     if (err)
         LOG_ERRORF("删除规则失败 %s(%s)", cidr, strerror(errno));
     return err;

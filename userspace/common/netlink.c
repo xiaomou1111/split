@@ -133,10 +133,19 @@ static uint32_t default_route_table(struct rtmsg *rtm, int payload)
  * 注：iif/oif/l3mdev 经 FRA_* 属性传递（fib_rule_hdr 无这些字段，编译已验证）。 */
 static int rule_steals_table(struct nlmsghdr *nlh, uint32_t tbl)
 {
-    struct fib_rule_hdr *frh = (struct fib_rule_hdr *)NLMSG_DATA(nlh);
-    int payload = NLMSG_PAYLOAD(nlh, sizeof(struct fib_rule_hdr));
+    struct fib_rule_hdr *frh;
     struct rtattr *rta;
-    uint32_t rtab = (uint32_t)frh->table;
+    int payload;
+    uint32_t rtab;
+
+    /* 审查（2026-08）：调用方只校验了 nlmsghdr 级长度，此处读 frh->action/
+     * dst_len 等固定字段前必须先证消息足以容纳 fib_rule_hdr——畸形/截断消息
+     * 会读到缓冲内未初始化字节，误判 hijack。内核正常恒发完整头，纯防御。 */
+    if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct fib_rule_hdr)))
+        return 0;
+    frh = (struct fib_rule_hdr *)NLMSG_DATA(nlh);
+    payload = NLMSG_PAYLOAD(nlh, sizeof(struct fib_rule_hdr));
+    rtab = (uint32_t)frh->table;
 
     if (frh->action != FR_ACT_TO_TBL)
         return 0;
@@ -338,6 +347,11 @@ int route_tun_hijacked(int tun_ifindex)
                     if (nlh->nlmsg_type != RTM_NEWROUTE)
                         continue;
 
+                    /* 审查（2026-08）：读 rtm->rtm_dst_len 等固定字段前先证消息
+                     * 足以容纳 rtmsg——畸形消息读到缓冲内未初始化字节会误判表归属。
+                     * 内核正常恒发完整头，纯防御。 */
+                    if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct rtmsg)))
+                        goto out_err;
                     rtm = (struct rtmsg *)NLMSG_DATA(nlh);
                     /* default 路由：目标前缀长度为 0 */
                     if (rtm->rtm_dst_len != 0)
@@ -494,9 +508,19 @@ int iface_scan(struct iface_list *list)
                 return -1;
             }
             if (nlh->nlmsg_type == RTM_NEWLINK) {
-                struct ifinfomsg *ifm = (struct ifinfomsg *)NLMSG_DATA(nlh);
+                struct ifinfomsg *ifm;
                 int attrs_off;
                 struct rtattr *rta;
+
+                /* 审查（2026-08）：读 ifm->ifi_index/type/flags 前先证消息足以容纳
+                 * ifinfomsg——畸形消息会读到缓冲内未初始化字节（name 属性读取已按
+                 * RTA_OK 有界，固定字段此前未校验）。内核正常恒发完整头，纯防御。 */
+                if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct ifinfomsg))) {
+                    LOG_WARNF("iface 扫描收到畸形 ifinfomsg，丢弃本次结果");
+                    close(fd);
+                    return -1;
+                }
+                ifm = (struct ifinfomsg *)NLMSG_DATA(nlh);
 
                 if (list->count >= IFACE_MAX) {
                     /* 审查（2026-08 P2）：达到上限按扫描失败处理（return -1），而非

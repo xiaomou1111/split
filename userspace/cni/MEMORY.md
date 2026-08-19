@@ -83,9 +83,12 @@
    ok==0 时显式 LOG_WARNF（v4-only 文件配到 v6 等错配不再被 INFO 掩盖）。行为零变化。
    **v1.4.6（审查 P2）**：下载校验改 **dry-run**——`cnip_load_fd` 增加 `dry_run` 参数，
    `cnip_try_url` 校验阶段 `dry_run=1`（走 loader `map_cnip_cidr_ok` 只判定 ok/bad、不写 map），
-   `cnip_from_path`/`cnip_apply` 真正加载 `dry_run=0`。此前校验期直接 `map_cnip_add_cidr`
-   落 map，`rename(tmp,path)` 失败（磁盘满/权限）且全配置族失败跳过 `cnip_apply` 时，
-   map 会残留本地旧文件里没有的新下载条目（map≠file），且"沿用旧文件重灌"日志误导。
+    `cnip_from_path`/`cnip_apply` 真正加载 `dry_run=0`。此前校验期直接 `map_cnip_add_cidr`
+    落 map，`rename(tmp,path)` 失败（磁盘满/权限）且全配置族失败跳过 `cnip_apply` 时，
+    map 会残留本地旧文件里没有的新下载条目（map≠file），且"沿用旧文件重灌"日志误导。
+   **审查（2026-08）失败路径清理 `.tmp`**：`cnip_fetch_to_path` 在下载/校验失败与 `rename`
+    失败两条路径都 `unlink(tmp)`——此前会遗留 `<path>.tmp` 坏文件，磁盘持续累积且可能被误当
+    已落盘正式文件。与 dry-run 同属失败后的现场清理，正常成功路径零变化。
 
 ## 日志（v1.4.5 补全，debug:true 可见）
 - `cnip_load_url`：下载器识别 `LOG_DEBUGF("CNIP 下载器: %s (curl|wget 系)")`（fork 前探测一次）；

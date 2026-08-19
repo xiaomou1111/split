@@ -26,6 +26,10 @@
    （正文仍打到 stdout）。此前 daemon 回 `ERR`（规则非法/非 root/未配源）时退出码恒 0，
    `webuiapi.sh run()` 与脚本 `$?` 把失败当成功。依赖 daemon"回复首行 OK/ERR"契约，
    改 daemon 回复格式时必须同步这里。
+   **审查（2026-08）：ERR 判定改为跨 read 累积到首行**——SOCK_STREAM 无消息边界，首读可能只到
+   `"ER"` 就分片；旧实现只在"首次 read"判定（`first` 标志），分片后后续不再检查 → 操作失败被
+   误报成功。现用 `head[3]` 跨 read 累积首行前 3 个有效字节（跳前导空白、遇 `\n`/`\r` 提前停止）
+   判定 OK/ERR，不受分片影响。
    **v1.1.4：发送必须带 `'\n'` 终止符**——daemon 命令读取已改为"换行终止循环读"（SOCK_STREAM 不保消息边界），
    不带 '\n' 会让 daemon 等满 5s 超时回 `ERR 命令超时`，命令全部失效。命令长度上限因此为 510 字节（`"cmd\n"` ≤ 511）。
 3. `cmd_start`：`fork` + `execv`，**不 setsid/不 daemonize**（子进程继承终端，close stdin 到 /dev/null）。

@@ -170,8 +170,14 @@
   `FRA_FLOWLABEL_MASK` 依赖内核 6.9 头**——这三个常量 6.9 才进 `linux/fib_rules.h`，Ubuntu
   24.04（6.8）等旧工具链直接引用编译失败。修复：缺失时 `#ifndef` 补 mainline 枚举值
   （DSCP=25/FLOWLABEL=26/FLOWLABEL_MASK=27，落在 6.8 的 `__FRA_MAX` 之后不与旧枚举冲突）。
-  旧内核运行时不会发出这些属性，命中分支等价"不可能"，行为与新头完全一致。**勿改回 `#ifdef`
-  版本号判断**——`#ifdef` 对枚举常量恒假，只能走宏兜底。
+旧内核运行时不会发出这些属性，命中分支等价"不可能"，行为与新头完全一致。**勿改回 `#ifdef`
+   版本号判断**——`#ifdef` 对枚举常量恒假，只能走宏兜底。
+- 坑 10（2026-08 审查加固，纯防御）：**读固定字段前必须校验 `nlmsg_len` 足以容纳消息头**——
+  各处外层循环只校验了 `nlmsghdr` 级长度，随后直接 `NLMSG_DATA` 读 `fib_rule_hdr`（`rule_steals_table`）、
+  `rtmsg`（`route_tun_hijacked`）、`ifinfomsg`（`iface_scan`）的固定字段，短消息会读到缓冲内未初始化
+  字节（hijack 误判/表归属误判）。内核正常恒发完整头，纯防御性校验、零行为变化。已在三处入口补
+  `nlh->nlmsg_len < NLMSG_LENGTH(sizeof(...))` 即拒绝（rule/route 路径按检测失败、iface 路径按扫描
+  失败 return -1，与既有口径一致）。新增任何 netlink 结构体解析都要沿用此检查。
 - 坑 7（v1.1.4）：**`config_load` 先 fopen 再 `config_defaults`**——此前 defaults 在 fopen 前执行，
   文件打不开时调用方 cfg 已被重置成默认值，daemon reload 的"失败沿用内存配置"实际变成
   "重放默认规则"（自定义 proxy/direct/skip_uid 全丢）。修复后打开失败 cfg 保持原样。

@@ -120,8 +120,14 @@ static int send_cmd(const char *cmd)
      * 挂死。daemon 单命令即断协议，正常回复远小于 10s。 */
     /* v1.4.6（审查 P2）：回复首行契约 OK/ERR——ERR 必须映射非零退出码，否则
      * webuiapi.sh run() 与脚本 $? 判断会把操作失败当成功（规则增删/update-cnip
-     * 误报）。ERR 正文仍照常打到 stdout（含错误信息），只影响退出码。 */
-    int ret = 0, first = 1;
+     * 误报）。ERR 正文仍照常打到 stdout（含错误信息），只影响退出码。
+     * 审查（2026-08）：ERR 判定必须跨 read 累积到首行（SOCK_STREAM 无消息边界，
+     * 首读可能只到 "ER" 就分片）——旧实现只在"首次 read"判定，分片时 `first`
+     * 已清零、后续不再检查，失败被误报成功。现用 head[] 累积首行前 3 个有效
+     * 字节（跳前导空白），够 3 字节即判定，不受分片影响。 */
+    int ret = 0;
+    char head[3];
+    int headlen = 0;
     for (;;) {
         struct pollfd p = { .fd = fd, .events = POLLIN };
         int pr = poll(&p, 1, 10000);
@@ -135,13 +141,20 @@ static int send_cmd(const char *cmd)
         if (n > 0) {
             buf[n] = '\0';
             fputs(buf, stdout);
-            if (first) {
-                const char *s = buf;
-                first = 0;
-                while (*s == ' ' || *s == '\t')
-                    s++;
-                if (strncmp(s, "ERR", 3) == 0)
-                    ret = 1;
+            if (headlen < (int)sizeof(head)) {
+                /* 累积首行前 3 个有效字节（跳过前导空白，判定 OK/ERR） */
+                for (ssize_t i = 0; i < n && headlen < (int)sizeof(head); i++) {
+                    char ch = buf[i];
+
+                    if (headlen == 0 && (ch == ' ' || ch == '\t'))
+                        continue;
+                    head[headlen++] = ch;
+                    /* 首行结束：无需更多字节即可判定 */
+                    if (ch == '\n' || ch == '\r')
+                        break;
+                }
+                if (headlen >= (int)sizeof(head))
+                    ret = strncmp(head, "ERR", sizeof(head)) == 0 ? 1 : 0;
             }
             continue;
         }
