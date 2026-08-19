@@ -19,12 +19,20 @@ LOG_DIR="$INSTALL_DIR/logs"
 RUN_DIR="$INSTALL_DIR/run"
 LOG="$LOG_DIR/splitd.log"
 TUN_CONTRACT="$INSTALL_DIR/scripts/split-tun-contract.sh"
+CGROUP_SCRIPT="$INSTALL_DIR/scripts/split-cgroup.sh"
 TUN_DEVICE=utun
 
 mkdir -p "$BIN_DIR" "$INSTALL_DIR/config" "$LOG_DIR" "$RUN_DIR" 2>/dev/null
 : > "$LOG"
 
 log() { echo "[split] $(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
+
+# 把 split 服务进程迁入独立 cgroup，脱离 Android AppFreezer 冻结管控（v1.4.9）
+# （详见 split-cgroup.sh 头部注释；失败静默容忍，不阻断服务启动）
+adopt_cgroup() {
+  [ -x "$CGROUP_SCRIPT" ] || return 0
+  "$CGROUP_SCRIPT" >> "$LOG" 2>&1
+}
 
 if [ -x "$TUN_CONTRACT" ]; then
   if ! TUN_DEVICE=$("$TUN_CONTRACT" "$CONFIG" 2>>"$LOG"); then
@@ -37,6 +45,7 @@ start_watchdog() {
   [ -x "$INSTALL_DIR/scripts/split-watchdog.sh" ] || return 0
   "$INSTALL_DIR/scripts/split-watchdog.sh" >> "$LOG" 2>&1 &
   log "split-watchdog 已拉起（目标 TUN=$TUN_DEVICE，每 15s 探活 splitd）"
+  adopt_cgroup
 }
 
 # ---------- 1) 内核能力 ----------
@@ -92,6 +101,7 @@ start_mihomo() {
   fi
   "$BIN_DIR/mihomo" -d "$INSTALL_DIR/mihomo" >> "$LOG_DIR/mihomo.log" 2>&1 &
   log "mihomo 已启动 pid=$!"
+  adopt_cgroup
 }
 
 # late_start 时网络/接口可能未就绪，mihomo 可能早退，做有限重试
@@ -128,6 +138,7 @@ if [ "$has_splitd" -eq 1 ]; then
     else
       "$BIN_DIR/splitd" -c "$CONFIG" -b "$BIN_DIR/split.bpf.o" >> "$LOG" 2>&1 &
       sleep 2
+      adopt_cgroup
       if "$BIN_DIR/splitctl" status >> "$LOG" 2>&1; then
         log "splitd 已启动（TUN=$TUN_DEVICE）"
       else

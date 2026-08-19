@@ -78,6 +78,8 @@ sed -i "s|path_v6: .*|path_v6: $CONFIG_DIR/cn_cidr_v6.txt|" "$CONFIG"
 echo "== 6. 启动 mihomo（TUN）=="
 nohup "$MIHOMO_BIN" -d "$MIHOMO_DIR" > "$LOG_DIR/mihomo.log" 2>&1 &
 echo "mihomo pid=$!"
+# 迁入独立 cgroup 脱离 AppFreezer 冻结（v1.4.9，失败静默）
+[ -x "$SPLIT_DIR/scripts/split-cgroup.sh" ] && "$SPLIT_DIR/scripts/split-cgroup.sh" || true
 
 echo "== 7. 等待 $TUN_DEVICE（最多 15s）=="
 tun_ok=""
@@ -103,6 +105,8 @@ if [ -x "$SPLIT_DIR/scripts/split-watchdog.sh" ]; then
   "$SPLIT_DIR/scripts/split-watchdog.sh" >> "$LOG_DIR/splitd.log" 2>&1 &
 fi
 sleep 3
+# 迁入独立 cgroup 脱离 AppFreezer 冻结（v1.4.9，失败静默；set -e 下用 || true 防误退）
+[ -x "$SPLIT_DIR/scripts/split-cgroup.sh" ] && "$SPLIT_DIR/scripts/split-cgroup.sh" || true
 
 echo "== 9. 验证 =="
 "$BIN_DIR/splitctl" status 2>&1

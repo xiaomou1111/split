@@ -22,4 +22,7 @@ if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ]; then
   fi
 fi
 
-"$BIN_DIR/splitd" -d -c "$CONFIG" -b "$BIN_DIR/split.bpf.o" 2>&1
+"$BIN_DIR/splitd" -d -c "$CONFIG" -b "$BIN_DIR/split.bpf.o" 2>&1 &
+sleep 2
+# 迁入独立 cgroup 脱离 AppFreezer 冻结（v1.4.9，失败静默）
+[ -x "$INSTALL_DIR/scripts/split-cgroup.sh" ] && "$INSTALL_DIR/scripts/split-cgroup.sh"

@@ -30,11 +30,18 @@ LOG_DIR="$INSTALL_DIR/logs"
 LOG="$LOG_DIR/splitd.log"
 DISABLED="$RUN_DIR/splitd.disabled"
 TUN_CONTRACT="$INSTALL_DIR/scripts/split-tun-contract.sh"
+CGROUP_SCRIPT="$INSTALL_DIR/scripts/split-cgroup.sh"
 TUN_DEVICE=utun
 INTERVAL=${1:-15}
 export SPLIT_SOCKET="$RUN_DIR/splitd.sock"
 
 log() { echo "[wd] $(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
+
+# 服务进程迁入独立 cgroup（脱离 AppFreezer 冻结，v1.4.9），失败静默容忍
+adopt_cgroup() {
+  [ -x "$CGROUP_SCRIPT" ] || return 0
+  "$CGROUP_SCRIPT" >> "$LOG" 2>&1
+}
 
 if [ -x "$TUN_CONTRACT" ]; then
   if ! TUN_DEVICE=$("$TUN_CONTRACT" "$CFG" 2>>"$LOG"); then
@@ -69,6 +76,7 @@ restart_mihomo() {
     fi
   fi
   "$BIN_DIR/mihomo" -d "$INSTALL_DIR/mihomo" >> "$LOG_DIR/mihomo.log" 2>&1 &
+  adopt_cgroup
 }
 
 # 单实例：杀掉其它正在跑的本脚本（含上一次启动残留），排除自身（$$）
@@ -93,6 +101,8 @@ mihomo_tun_fails=0
 mihomo_recover_ts=0
 while :; do
   sleep "$INTERVAL"
+
+  adopt_cgroup
 
   if ! refresh_tun; then
     log "无法刷新 split.yaml 的 tun_device，本轮跳过"
@@ -188,6 +198,7 @@ while :; do
 
   log "splitd 未运行（探活失败），重新拉起（第 $fails 次尝试，TUN=$TUN_DEVICE）"
   "$BIN_DIR/splitd" -c "$CFG" -b "$BIN_DIR/split.bpf.o" >> "$LOG" 2>&1 &
+  adopt_cgroup
   # 给 splitd 冷启动时间，下一轮循环再探活（避免启动过程被误判为死）
   sleep "$INTERVAL"
 done

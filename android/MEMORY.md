@@ -36,6 +36,16 @@
   `default_verdict=tun` 全流量灌进 mihomo → 高 CPU/高内存/连接风暴）。customize.sh 二进制段现为：
   ① 先 `touch run/splitd.disabled` + `pkill` 旧 splitd/splitctl/watchdog（防 5 分钟循环拉起）；
   ② `cp -f` 后 `cmp -s` 校验，失败即 `abort`。**硬契约：改 customize.sh 二进制部署时，停进程 + 覆盖校验缺一不可。**
+- **坑 16（v1.4.9 真机，服务进程被 AppFreezer 冻结误杀）**：mihomo/splitd/watchdog 由 KernelSU
+  WebUI/管理器拉起时继承 kernelsu（uid_10443）的 cgroup（`/sys/fs/cgroup/apps/uid_*/pid_*`）。
+  熄屏/后台时 Android AppFreezer 冻结该 cgroup（`cgroup.freeze=1`）→ 同 cgroup 的 mihomo 连带
+  冻结（wchan=`do_freezer_trap`，无法处理流量/心跳）→ 系统以 "while frozen" 名义 kill → 表现为
+  "mihomo 频频崩溃/退出"。**非代码崩溃（dmesg 显 `state:Z exited with status 0`），是环境冻结。**
+  修复：`scripts/split-cgroup.sh`（新增）把三进程迁入独立 cgroup `/sys/fs/cgroup/split_svc`
+  （与 `/apps` 平级，AppFreezer 只冻 apps 子树，影响不到），并设 `oom_score_adj=-17`。
+  接入点：service.sh（start_mihomo/start_watchdog/splitd 三段）、split-watchdog.sh（循环每轮 +
+  restart_mihomo + splitd 拉起）、start-split.sh、setup-box-tun.sh。**硬契约：任何新拉起/重启
+  split 服务进程的路径，都必须在 spawn 后调用 split-cgroup.sh，否则新进程会回落回应用 cgroup 被冻结。**
 - 坑 4（v1.0.2 实测）：**`export SPLIT_SOCKET="$INSTALL_DIR/run/splitd.sock"`** 必须在起 splitd 前设置
   （Android 无 /run，不设则 ctl socket 绑不上）。service.sh / start-split.sh / stop-split.sh 都已加。
 - 坑 5（v1.0.2 实测）：**BPF 必须 `-mcpu=v1`**，否则真机 5.x GKI verifier 报 `BPF_STX uses reserved fields` 拒载（见 docs/03 §8.5）。

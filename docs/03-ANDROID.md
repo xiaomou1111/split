@@ -117,6 +117,11 @@ boot → post-fs-data(挂 bpffs) → late_start service.sh
     7) (v1.1.7) 拉起 `scripts/split-watchdog.sh` 守护 splitd（doze/LMK 杀掉后自动重启）
     8) (v1.2.9) watchdog 另守 mihomo TUN：探活到 map_tun=0（mihomo TUN 消失）时经 mihomo
        API 无感恢复，API 失败则重启 mihomo——"splitd 活着但代理静默放行"也能自愈
+    9) (v1.4.9) `scripts/split-cgroup.sh` 把 mihomo/splitd/watchdog 迁入独立 cgroup
+       `/sys/fs/cgroup/split_svc`（与 `/apps` 平级），脱离 Android AppFreezer 冻结管控，
+       并设 `oom_score_adj=-17` 防系统误杀——否则由 KernelSU WebUI 拉起的服务会继承
+       kernelsu 的 cgroup，熄屏被冻结（wchan=do_freezer_trap）→ 以 "while frozen" 名义被杀，
+       表现为"mihomo 频频崩溃"（实为环境冻结，dmesg 显 `state:Z exited with status 0`）。
 ```
 
 `android/magisk/` 里已放好 `module.prop、customize.sh、service.sh、post-fs-data.sh、
