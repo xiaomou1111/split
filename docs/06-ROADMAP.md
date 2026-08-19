@@ -94,7 +94,14 @@ v1.2.7                 审查修复轮次：①DNS 学习器移除 cBPF 内核�
                        路由表集合容量 16→64、写满按检测失败处理防漏报接管⑦del-rule 前缀收敛
                        补 WARN 与 add 一致⑧tun_name_like 空 tun_device 不匹配⑨check-kernel.sh
                        退出码接入硬依赖检查⑩gen-magisk.sh versionCode 改为无碰撞方案
-v1.4.9（当前）        2026-08-18 CNIP 临时绕过开关：新增 `splitctl cnip on|off|status` 与
+v1.4.10（当前）        2026-08-19 审查加固批（纯防御+日志级，分流行为零变化）：①netlink
+                        rule_steals_table/route_tun_hijacked/iface_scan 读 fib_rule_hdr/rtmsg/
+                        ifinfomsg 固定字段前补 nlmsg_len 长度校验，防畸形消息读到未初始化字节
+                        (hijack/表归属误判)②splitctl send_cmd 的 ERR 判定改跨 read 累积首行，
+                        首读分片时失败不再误报成功③loader map_rule_del_cidr 对 -ENOENT 降级
+                        DEBUG 并幂等返回 0，删不存在规则不再刷 ERROR④cni cnip_fetch_to_path
+                        失败路径 unlink(.tmp) 清理坏文件；同步 4 目录 MEMORY.md
+v1.4.9        2026-08-18 CNIP 临时绕过开关：新增 `splitctl cnip on|off|status` 与
                         KernelSU WebUI 控制；`off` 仅跳过 BPF policy 第 6 步 CNIP LPM 查询、
                         后续按 default verdict 裁决，CNIP map 仍继续启动导入/后台刷新，普通
                         reload 保留状态、重启 splitd 恢复 on；map_cfg ABI 尾部追加 cnip_enabled，

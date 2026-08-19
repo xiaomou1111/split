@@ -1,6 +1,6 @@
 ﻿# eBPF-Split 使用说明书
 
-> 版本 v1.4.9 ｜ 面向：想在 Linux / Android 真机上用起来的人
+> 版本 v1.4.10 ｜ 面向：想在 Linux / Android 真机上用起来的人
 > 目标读者：能看懂 shell 命令、会 root 的普通用户。代码细节见 `docs/`。
 
 ---
