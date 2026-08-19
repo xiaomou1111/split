@@ -7,10 +7,10 @@
 #
 # 原理：
 #   1. 复制 box 的 mihomo 目录到 split 专用目录（不改 box 原件）
-#   2. 改 tun 段：enable:true, device:utun, mtu:1500, auto-route:false,
+#   2. 改 tun 段：enable:true, device:split.yaml 的 tun_device, mtu:1500, auto-route:false,
 #      stack:gvisor, gso:false, auto-detect-interface:false
 #   3. 复用 box 的 CNIP 数据（/data/adb/box/run/cn.zone）
-#   4. 起 mihomo → 等 utun → 起 splitd
+#   4. 起 mihomo → 等目标 TUN → 起 splitd
 set -e
 
 SPLIT_DIR=/data/adb/split
@@ -23,12 +23,17 @@ BOX_MIHOMO=/data/adb/box/mihomo
 BOX_RUN=/data/adb/box/run
 MIHOMO_BIN=/data/adb/box/bin/mihomo
 CONFIG=$CONFIG_DIR/split.yaml
+TUN_CONTRACT=$SPLIT_DIR/scripts/split-tun-contract.sh
+TUN_DEVICE=utun
 
 echo "== 0. 前置检查 =="
 [ -x "$MIHOMO_BIN" ] || { echo "缺少 mihomo 二进制 $MIHOMO_BIN"; exit 1; }
 [ -d "$BOX_MIHOMO" ] || { echo "缺少 box mihomo 配置目录"; exit 1; }
 [ -x "$BIN_DIR/splitd" ] || { echo "缺少 splitd（$BIN_DIR/splitd）"; exit 1; }
 mkdir -p "$LOG_DIR" "$RUN_DIR"
+if [ -x "$TUN_CONTRACT" ]; then
+  TUN_DEVICE=$("$TUN_CONTRACT" "$CONFIG") || { echo "split.yaml 的 tun_device 无效"; exit 1; }
+fi
 
 echo "== 1. 准备 split 专用 mihomo 目录 =="
 pkill -f "mihomo.*$MIHOMO_DIR" 2>/dev/null || true
@@ -36,14 +41,20 @@ rm -rf "$MIHOMO_DIR"
 mkdir -p "$MIHOMO_DIR"
 cp -a "$BOX_MIHOMO/." "$MIHOMO_DIR/"
 
-echo "== 2. 改 tun 段（enable / device / mtu / auto-route / stack:gvisor / gso:off / auto-detect-interface）=="
-# 委托给 fix-mihomo-tun.sh（v1.1.3 抽取，单一真源）：全部整行重写、幂等。
-# v1.4.8：此处不再残留内联 sed——早期注释称"原内联 sed 已移除"但 enable/device 两条
-#   实际残留，且 enable 是共享键名，无作用域的全文件 `^  enable:` 替换可能误中
-#   dns.enable。enable:true / device:utun 均已收敛进 fix-mihomo-tun.sh（enable 段内
-#   限域处理），toybox sed 不支持 `0,/re/` 地址也在该脚本内规避。
+echo "== 2. 改 tun 段（目标 $TUN_DEVICE；enable / device / mtu / auto-route / stack:gvisor / gso:off / auto-detect-interface）=="
+# 委托给 fix-mihomo-tun.sh：全部字段仅在 tun 段内规范化、幂等。
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
-sh "$(dirname "$SELF")/fix-mihomo-tun.sh" "$MIHOMO_DIR/config.yaml" || echo "  (fix-mihomo-tun 无 tun 段，跳过)"
+if sh "$(dirname "$SELF")/fix-mihomo-tun.sh" "$MIHOMO_DIR/config.yaml" "$TUN_DEVICE"; then
+  :
+else
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "  (fix-mihomo-tun 未发现 tun 段，跳过)"
+  else
+    echo "fix-mihomo-tun 修复失败，停止启动"
+    exit "$rc"
+  fi
+fi
 echo "-- 修改后 tun 段："
 sed -n '/^tun:/,/^  udp-timeout:/p' "$MIHOMO_DIR/config.yaml"
 
@@ -68,14 +79,16 @@ echo "== 6. 启动 mihomo（TUN）=="
 nohup "$MIHOMO_BIN" -d "$MIHOMO_DIR" > "$LOG_DIR/mihomo.log" 2>&1 &
 echo "mihomo pid=$!"
 
-echo "== 7. 等 utun（最多 15s）=="
-utun_ok=""
+echo "== 7. 等待 $TUN_DEVICE（最多 15s）=="
+tun_ok=""
 for i in $(seq 1 15); do
-  if [ -e /sys/class/net/utun ]; then echo "utun 已出现"; utun_ok=1; break; fi
+  if [ -e "/sys/class/net/$TUN_DEVICE" ] || ip link show "$TUN_DEVICE" >/dev/null 2>&1; then
+    echo "$TUN_DEVICE 已出现"; tun_ok=1; break
+  fi
   sleep 1
 done
-[ -n "$utun_ok" ] || { echo "utun 未出现，mihomo TUN 可能失败"; tail -10 "$LOG_DIR/mihomo.log"; exit 1; }
-ip link set utun up 2>/dev/null || true
+[ -n "$tun_ok" ] || { echo "$TUN_DEVICE 未出现，mihomo TUN 可能失败"; tail -10 "$LOG_DIR/mihomo.log"; exit 1; }
+ip link set "$TUN_DEVICE" up 2>/dev/null || true
 
 echo "== 8. 启动 splitd =="
 export SPLIT_SOCKET="$RUN_DIR/splitd.sock"

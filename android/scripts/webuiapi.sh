@@ -53,12 +53,70 @@ export SPLIT_LOG="$LOG_DIR/splitd.log"
 
 CTL="$BIN_DIR/splitctl"
 SPLITD="$BIN_DIR/splitd"
+TUN_CONTRACT="$INSTALL_DIR/scripts/split-tun-contract.sh"
+TUN_DEVICE=""
+STATUS_OUT=""
 
 ACTION="$1"
 
 run() {
   "$CTL" "$@" 2>&1
   return $?
+}
+
+resolve_tun() {
+  if [ ! -x "$TUN_CONTRACT" ]; then
+    echo "ERR: 缺少 TUN 契约解析器 $TUN_CONTRACT（请重新安装模块）"
+    return 1
+  fi
+  TUN_DEVICE=$("$TUN_CONTRACT" "$CFG") || {
+    echo "ERR: 无法解析 split.yaml 的 tun_device"
+    return 1
+  }
+  return 0
+}
+
+tun_exists() {
+  [ -d "/sys/class/net/$TUN_DEVICE" ] || ip link show "$TUN_DEVICE" >/dev/null 2>&1
+}
+
+wait_for_tun() {
+  limit="${1:-30}"
+  i=0
+  while [ "$i" -lt "$limit" ]; do
+    tun_exists && return 0
+    i=$((i + 1))
+    sleep 1
+  done
+  return 1
+}
+
+splitd_ready() {
+  STATUS_OUT=$("$CTL" status 2>&1) || return 1
+  tun=$(printf '%s' "$STATUS_OUT" | sed -n 's/.*tun=\([0-9][0-9]*\).*/\1/p' | head -n1)
+  [ -n "$tun" ] && [ "$tun" -gt 0 ]
+}
+
+wait_for_splitd_ready() {
+  limit="${1:-10}"
+  i=0
+  while [ "$i" -lt "$limit" ]; do
+    splitd_ready && return 0
+    i=$((i + 1))
+    sleep 1
+  done
+  return 1
+}
+
+ensure_watchdog() {
+  if [ ! -x "$INSTALL_DIR/scripts/split-watchdog.sh" ]; then
+    echo "ERR: 缺少 split-watchdog.sh（请重新安装模块）"
+    return 1
+  fi
+  if ! pgrep -f "split-watchdog.sh" >/dev/null 2>&1; then
+    "$INSTALL_DIR/scripts/split-watchdog.sh" >> "$LOG_DIR/splitd.log" 2>&1 &
+  fi
+  return 0
 }
 
 mihomo_alive() {
@@ -98,10 +156,19 @@ mihomo_start() {
     echo "ERR: 未随包 mihomo 二进制（$MIHOMO_BIN）"
     return 1
   fi
-  # 与 service.sh 一致：启动前先对齐 tun 段契约（auto-route:false），
-  # 防止 box 原样配置/用户手改导致 eBPF 分流被 mihomo 路由接管静默失效。
+  resolve_tun || return 1
+  # 与 service.sh 一致：启动前先按 split.yaml 的 tun_device 对齐 tun 段，
+  # 防止 mihomo 配置与 splitd 的实际 TUN 目标不一致。
   if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ] && [ -f "$MIHOMO_DIR/config.yaml" ]; then
-    "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$MIHOMO_DIR/config.yaml" 2>&1 || true
+    if "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$MIHOMO_DIR/config.yaml" "$TUN_DEVICE" 2>&1; then
+      :
+    else
+      rc=$?
+      if [ "$rc" -ne 1 ]; then
+        echo "ERR: mihomo tun 配置修复失败（rc=$rc）"
+        return "$rc"
+      fi
+    fi
   fi
   if mihomo_alive; then
     echo "OK: mihomo 已在运行"
@@ -112,7 +179,8 @@ mihomo_start() {
   for try in 1 2 3; do
     sleep 2
     if mihomo_alive; then
-      echo "OK: mihomo 已启动" && return 0
+      echo "OK: mihomo 已启动"
+      return 0
     fi
   done
   echo "ERR: mihomo 启动后退出（见日志尾）"
@@ -196,27 +264,93 @@ case "$ACTION" in
   list-rules) run list-rules ;;
   version)    echo "SPLIT_VERSION=$SPLIT_VERSION" ;;
   start)
-    # 后台派生 splitd（splitctl start 自身 fork，脱离开断）
-    # 必须带 -b 指定 BPF 对象（Android 默认 /etc/split/split.bpf.o 不存在）
-    # v1.1.3：启动前先对齐 mihomo tun 段契约（auto-route:false），
-    # 防止 box 原样配置/用户手改导致 eBPF 分流被路由接管静默失效
-    if [ -f "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ] && [ -f "$INSTALL_DIR/mihomo/config.yaml" ]; then
-      "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" 2>&1 || true
+    # 完整启动顺序：mihomo → 目标 TUN → splitd → status → watchdog。
+    # 失败时不清停止闸、不派生 watchdog，避免把 exit(3)/BPF 错误伪装成成功。
+    resolve_tun || exit 1
+    if [ ! -x "$SPLITD" ] || [ ! -x "$CTL" ] || [ ! -f "$BIN_DIR/split.bpf.o" ]; then
+      echo "ERR: splitd 运行资产不完整（需要 splitd、splitctl、split.bpf.o）"
+      exit 1
     fi
-    # v1.1.7：清显式停止闸 + 拉起存活守护（防 doze/LMK 杀 splitd 后无人拉起）
+
+    # 幂等：已有健康 daemon 不再二次派生，避免单实例 exit(4) 噪声。
+    if splitd_ready; then
+      rm -f "$RUN_DIR/splitd.disabled"
+      ensure_watchdog || exit 1
+      printf '%s\n' "$STATUS_OUT"
+      exit 0
+    fi
+    # 若进程已存在但 socket 尚未就绪，等待它，而不是再派生第二个实例。
+    if pgrep -f "$SPLITD" >/dev/null 2>&1; then
+      if wait_for_splitd_ready 10; then
+        rm -f "$RUN_DIR/splitd.disabled"
+        ensure_watchdog || exit 1
+        printf '%s\n' "$STATUS_OUT"
+        exit 0
+      fi
+      touch "$RUN_DIR/splitd.disabled"
+      echo "ERR: splitd 进程已存在但 ctl status 未就绪，请查看 $LOG_DIR/splitd.log"
+      exit 1
+    fi
+
+    # 随包 mihomo 由已有 helper 启动；没有随包二进制时允许外部代理先建 TUN。
+    if [ -x "$MIHOMO_BIN" ]; then
+      if ! mihomo_start; then
+        touch "$RUN_DIR/splitd.disabled"
+        exit 1
+      fi
+    else
+      echo "未随包 mihomo，等待外部代理创建 TUN=$TUN_DEVICE"
+    fi
+    if ! wait_for_tun 30; then
+      touch "$RUN_DIR/splitd.disabled"
+      echo "ERR: 30s 内未发现 TUN=$TUN_DEVICE，请检查 mihomo.log 或外部代理配置"
+      exit 1
+    fi
+
+    # TUN 已就绪后再次确认，覆盖并发的其它启动路径。
+    if splitd_ready; then
+      rm -f "$RUN_DIR/splitd.disabled"
+      ensure_watchdog || exit 1
+      printf '%s\n' "$STATUS_OUT"
+      exit 0
+    fi
+    start_out=$("$CTL" -c "$CFG" -s "$SPLITD" -b "$BIN_DIR/split.bpf.o" start 2>&1)
+    start_rc=$?
+    if [ "$start_rc" -ne 0 ]; then
+      printf '%s\n' "$start_out" >> "$LOG_DIR/splitd.log"
+      touch "$RUN_DIR/splitd.disabled"
+      echo "ERR: splitd 派生失败（rc=$start_rc），请查看 $LOG_DIR/splitd.log"
+      exit 1
+    fi
+    if ! wait_for_splitd_ready 10; then
+      touch "$RUN_DIR/splitd.disabled"
+      echo "ERR: splitd 未在 10s 内达到 status OK/tun>0，请查看 $LOG_DIR/splitd.log"
+      exit 1
+    fi
     rm -f "$RUN_DIR/splitd.disabled"
-    "$INSTALL_DIR/scripts/split-watchdog.sh" >> "$LOG_DIR/splitd.log" 2>&1 &
-    # v1.2.2：splitd 路径用 -s（v1.1.9 起 -d 已改为零参 debug，旧 `-d 路径` 写法会导致
-    # 派生到默认 /usr/local/bin/splitd 而非本模块 bin/，Android 上启动必失败）
-    "$CTL" start -c "$CFG" -s "$SPLITD" -b "$BIN_DIR/split.bpf.o"
-    sleep 1
-    "$CTL" status
+    ensure_watchdog || exit 1
+    printf '%s\n' "$STATUS_OUT"
     ;;
   stop)
-    # v1.1.7：先置停止闸再停 splitd，watchdog 见之不再拉起（防"刚 stop 又被拉活"）
+    # 先置闸、停止 watchdog，再通过 socket 请求优雅退出；socket 失败时精确杀本模块 splitd。
     touch "$RUN_DIR/splitd.disabled"
     pkill -f "split-watchdog.sh" 2>/dev/null
-    run stop ;;
+    stop_out=$("$CTL" stop 2>&1)
+    stop_rc=$?
+    sleep 1
+    if pgrep -f "$SPLITD" >/dev/null 2>&1; then
+      pkill -f "$SPLITD" 2>/dev/null
+      sleep 1
+    fi
+    if pgrep -f "$SPLITD" >/dev/null 2>&1; then
+      echo "ERR: splitd 停止失败，仍有进程残留"
+      [ -n "$stop_out" ] && printf '%s\n' "$stop_out"
+      exit 1
+    fi
+    [ -n "$stop_out" ] && printf '%s\n' "$stop_out"
+    # socket 不存在时 stop 是幂等成功；真实 ctl 错误且仍有进程的情况已在上面失败。
+    [ "$stop_rc" -eq 0 ] || echo "OK: splitd 未运行（停止闸已设置）"
+    ;;
   reload)     run reload ;;
   reload-cnip) run reload-cnip ;;
   update-cnip) run update-cnip ;;

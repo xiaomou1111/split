@@ -274,7 +274,14 @@ splitctl validate -c cfg             # 只校验配置
 > iface reconcile 每轮增删汇总。排障先开它，再对照下面的 Q&A。
 
 ### Q1. splitd 启动报"找不到 tun 设备"
-→ 先启动 mihomo，确认 tun 设备出现：`ip link show utun`。设备名要和配置一致。
+→ WebUI/service 会先按 `split.yaml` 顶层 `tun_device` 等待目标接口；手动启动前也先启动 mihomo，确认：
+`ip link show <tun_device>`。设备名必须同时与 mihomo `tun.device` 和 split.yaml 一致。splitd 的 exit(3)
+表示启动前 TUN 缺失，不是 daemon 自己崩溃。
+
+### Q1.5. WebUI 启动后显示 splitd 未运行
+→ WebUI 顺序是 mihomo → 等目标 TUN → splitd → status → watchdog。若无随包 mihomo，先由外部代理
+创建配置中的 TUN；检查 `logs/mihomo.log` 与 `logs/splitd.log`。BPF 失败为 exit(2)，当前保持
+`auto-route:false`，不会自动变成可用的 pure-TUN 代理。
 
 ### Q2. BPF 加载报 `BPF_STX uses reserved fields`
 → 老内核（5.x GKI）不认新 clang 的 `BPF_ATOMIC`。必须 `-mcpu=v1` 编译（Makefile 已带，别去掉）。
@@ -307,8 +314,8 @@ splitctl validate -c cfg             # 只校验配置
 → 是 mihomo 节点自身的连通性问题（订阅/出口），不是框架问题。
 
 ### Q8. 代理突然全部放行直连，`miss_tun` 持续增长（v1.2.9 自愈）
-→ 根因：mihomo 的 TUN 中途消失（`tun.enable` 被外部控制器（9090）改 false、或 utun 被系统/外部
-清理）→ splitd 的 `map_tun` 置 0 → 代理流量被放行直连，`splitctl stats` 里 `miss_tun` 持续增长
+→ 根因：mihomo 的 TUN 中途消失（`tun.enable` 被外部控制器（9090）改 false、或配置中的 `tun_device`
+接口被系统/外部清理）→ splitd 的 `map_tun` 置 0 → 代理流量被放行直连，`splitctl stats` 里 `miss_tun` 持续增长
 却无报错。自 v1.2.9 起 `split-watchdog.sh` 已内置自愈：连续 2 轮探活到 `tun=0` 且 `bin/mihomo`
 存在时，先经 mihomo API（`PATCH /configs {"tun":{"enable":true}}`）无感恢复，失败则重启 mihomo，
 恢复后 5 分钟冷却。若仍复现，检查 `logs/splitd.log` 的 `[wd]` 前缀日志与 mihomo 9090 是否有

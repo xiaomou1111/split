@@ -15,11 +15,17 @@
 #   - 只删指向私有表的规则（table 不是 main/local/99/98/97/1002 等系统表）；
 #   - 删失败（表/规则不存在）静默忽略。
 #
-# 用法: clean-mihomo-residue.sh [tun_device]   缺省 utun
+# 用法: clean-mihomo-residue.sh [tun_device]   缺省读取 split.yaml 的 tun_device
 # 返回: 0 总是（幂等清理，非失败语义）
 set -u
 
-TUN="${1:-utun}"
+if [ -n "${1:-}" ]; then
+  TUN="$1"
+elif [ -x /data/adb/split/scripts/split-tun-contract.sh ]; then
+  TUN=$(/data/adb/split/scripts/split-tun-contract.sh) || exit 1
+else
+  TUN=utun
+fi
 
 # 1) 清掉指向 tun 的私有表 default 路由（v4+v6）
 # 先精确匹配 "default dev <tun> ... table N"，只删私有表（避开 local/main 等系统表）

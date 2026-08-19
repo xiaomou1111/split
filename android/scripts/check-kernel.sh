@@ -52,7 +52,7 @@ echo "            adb shell su -c 'dmesg | grep avc | tail'   # SELinux 拦截"
 
 echo "== 结论 =="
 if [ "$ok" -eq 1 ]; then
-  echo "  基本可用；eBPF 可行性请按第 4 步实测。不可用场景框架会自动降级纯 TUN。"
+  echo "  基本可用；eBPF 可行性请按第 4 步实测。当前模块在 eBPF 失败时保持 auto-route:false，不会自动切换为纯 TUN 代理。"
 else
   echo "  存在缺失项（见上），先解决后再用。"
 fi

@@ -29,10 +29,27 @@ CFG="$INSTALL_DIR/config/split.yaml"
 LOG_DIR="$INSTALL_DIR/logs"
 LOG="$LOG_DIR/splitd.log"
 DISABLED="$RUN_DIR/splitd.disabled"
+TUN_CONTRACT="$INSTALL_DIR/scripts/split-tun-contract.sh"
+TUN_DEVICE=utun
 INTERVAL=${1:-15}
 export SPLIT_SOCKET="$RUN_DIR/splitd.sock"
 
 log() { echo "[wd] $(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
+
+if [ -x "$TUN_CONTRACT" ]; then
+  if ! TUN_DEVICE=$("$TUN_CONTRACT" "$CFG" 2>>"$LOG"); then
+    log "无法解析 split.yaml 的 tun_device，watchdog 暂停"
+    exit 1
+  fi
+fi
+
+refresh_tun() {
+  [ -x "$TUN_CONTRACT" ] || return 0
+  next_tun=$("$TUN_CONTRACT" "$CFG" 2>>"$LOG") || return 1
+  [ "$next_tun" = "$TUN_DEVICE" ] || log "目标 TUN 已更新: $TUN_DEVICE -> $next_tun"
+  TUN_DEVICE="$next_tun"
+  return 0
+}
 
 # mihomo 全重启（API 自愈失败后的兜底）：kill + fix-mihomo-tun.sh 对齐契约 + 重新拉起
 # （从 API 分支抽成函数，供"带鉴权/不带鉴权"两条 PATCH 路径共用，避免重复块）。
@@ -41,7 +58,15 @@ restart_mihomo() {
   pkill -f "$BIN_DIR/mihomo" 2>/dev/null
   sleep 2
   if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ] && [ -f "$INSTALL_DIR/mihomo/config.yaml" ]; then
-    "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" >> "$LOG" 2>&1 || true
+    if "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" "$TUN_DEVICE" >> "$LOG" 2>&1; then
+      :
+    else
+      rc=$?
+      if [ "$rc" -ne 1 ]; then
+        log "mihomo tun 段修复失败（rc=$rc），取消本次重启"
+        return "$rc"
+      fi
+    fi
   fi
   "$BIN_DIR/mihomo" -d "$INSTALL_DIR/mihomo" >> "$LOG_DIR/mihomo.log" 2>&1 &
 }
@@ -68,6 +93,12 @@ mihomo_tun_fails=0
 mihomo_recover_ts=0
 while :; do
   sleep "$INTERVAL"
+
+  if ! refresh_tun; then
+    log "无法刷新 split.yaml 的 tun_device，本轮跳过"
+    fails=0
+    continue
+  fi
 
   # 显式停止闸：用户 stop 过则不再拉起
   if [ -f "$DISABLED" ]; then
@@ -126,7 +157,7 @@ while :; do
   # v1.1.7/C：此二分支是"本次不尝试拉起"的跳过状态（非拉起失败），
   # 需复位 fails —— 否则先前失败计数会随 utun 缺席一直带进下一轮，
   # 待 mihomo tun 恢复后的首次拉起反而被陈旧指数退避拖慢。
-  if [ ! -d "/sys/class/net/utun" ] && ! ip link show utun >/dev/null 2>&1; then
+  if [ ! -d "/sys/class/net/$TUN_DEVICE" ] && ! ip link show "$TUN_DEVICE" >/dev/null 2>&1; then
     fails=0
     continue
   fi
@@ -148,7 +179,14 @@ while :; do
     sleep "$d"
   fi
 
-  log "splitd 未运行（探活失败），重新拉起（第 $fails 次尝试）"
+  # 退避期间可能发生显式 stop；sleep 返回后必须再次检查停止闸，不能把旧决定带到 spawn。
+  if [ -f "$DISABLED" ]; then
+    log "停止闸已设置，取消本轮 splitd 拉起"
+    fails=0
+    continue
+  fi
+
+  log "splitd 未运行（探活失败），重新拉起（第 $fails 次尝试，TUN=$TUN_DEVICE）"
   "$BIN_DIR/splitd" -c "$CFG" -b "$BIN_DIR/split.bpf.o" >> "$LOG" 2>&1 &
   # 给 splitd 冷启动时间，下一轮循环再探活（避免启动过程被误判为死）
   sleep "$INTERVAL"

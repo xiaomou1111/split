@@ -1,7 +1,7 @@
 # android — 记忆文档（改本目录代码前必读）
 
 > 覆盖：`magisk/`（模块骨架）、`scripts/`（起停/能力探测）、`app/`（预留）。
-> 目标：Magisk 23+ / KernelSU 兼容；**eBPF 可用 → 内核分流；不可用 → mihomo 纯 TUN**。
+> 目标：Magisk 23+ / KernelSU 兼容；**eBPF 可用 → 内核分流；不可用 → 流量 fail-open，mihomo 不会自动接管纯 TUN 路由**。
 
 ## 模块骨架（magisk/）
 - `module.prop`：`id=ebpf-split`，version 与 SPLIT_VERSION 保持同源——**v1.1.0 起由 gen-magisk.sh
@@ -11,17 +11,17 @@
   1. 探测（splitd 缺失 → 跳过 eBPF，**mihomo 仍会尝试启动**）；
   2. SELinux：`magiskpolicy --live` 放行 bpf/socket/tun（**magiskpolicy 不存在则静默跳过**——KernelSU 环境可能无此工具，此时依赖 sepolicy.rule）；
   3. 起随包 mihomo（独立于 splitd，缺 splitd 不影响 mihomo；晚启动网络未就绪时有限重试 3 次）；
-  4. 等 `utun` 出现（**30s 超时** → 降级纯 TUN）；
+  4. 等 `split.yaml` 的 `tun_device` 出现（**30s 超时** → 暂不派生 splitd，但仍拉 watchdog 等待后续出现）；
   5. `splitctl status` 自检。
   6. **v1.1.7：清 `run/splitd.disabled` 停止闸 + 后台拉起 `scripts/split-watchdog.sh`（15s 探活）**。
   - **坑 6（v1.0.2 修复）**：旧版把 mihomo 启动嵌在 `if [ ! -x splitd ]` 的 else 里，
-    一旦 splitd 缺失就"注释说纯 TUN 由 mihomo 负责、实际 mihomo 根本没起"→ 重启后全挂。
-    现在 mihomo 启动解耦到 splitd 判断之外。
+    一旦 splitd 缺失时 mihomo 也根本没起→重启后全挂。现在 mihomo 启动解耦到 splitd 判断之外；
+    但它保持 `auto-route:false`，不能把“mihomo 已起”误称为纯 TUN 代理已接管。
 - `sepolicy.rule`：magiskpolicy 不可用时的静态补充（rules 与 service.sh 的 `--live` 放行保持一致，改一处必改另一处）。
   **v1.0.5 扩 domain**：KernelSU→`ksu`/`su`、APatch→`ap`，与 `magisk` 一并放行 bpf/tun/unix_stream/netlink
   （各 root 方案进程 domain 不同，只放行 magisk 会在 KSU/APatch 上"能力对但 domain 不匹配"）。
-- 坑 1：**utun 的 ifindex 由 map_tun 动态写入**，splitd 用 `iface_index_by_name` 解析——设备名写死 `utun`，改 mihomo 的 tun.device 必须同步 split.yaml 的 `tun_device`。
-- 坑 2：splitd 是后台 `&` 起，退出 code 不传回；降级判断靠"30s 无 utun"而非 splitd exit code（daemon exit 2 的降级提示在日志里）。
+- 坑 1：**`tun_device` 是 Android 与 daemon 的共同真源**：`scripts/split-tun-contract.sh` 从 split.yaml 读取目标名，mihomo fixer、service、watchdog、setup-box 都传递同一值；缺省才是 `utun`。不要只改 mihomo 的 `tun.device` 或只改 split.yaml。
+- 坑 2：splitd 是后台 `&` 起，启动完成必须靠 `splitctl status`（且 `tun>0`）确认；30s 无目标 TUN 时 service 不派生 splitd，但会拉 watchdog 等其后续出现。
 - 坑 3：`service.sh` 用 `$MODDIR` 但 INSTALL_DIR 是 `/data/adb/split`（gen-magisk.sh 会把二进制解包到该目录）——**不要假设二进制在模块目录**。
 - **零重复（v1.1.x 约定）**：`/data/adb/modules/ebpf-split/`（module.prop `id=ebpf-split`）只做"安装源 + Magisk 必需文件"，`/data/adb/split/`
   是**唯一运行真源**。customize.sh 铺完 bin/config/scripts/mihomo 到运行目录后 `rm -rf` 模块预留副本；
@@ -29,6 +29,13 @@
   **审查修复（2026-08）：`config/split.yaml` 加 `[ ! -f ]` 升级保护**——只在首次安装铺默认配置，
   用户改过的自定义规则不再被升级包无条件 `cp` 覆盖（P0 数据丢失；口径与 mihomo config 的
   `[ ! -f ]` 保护一致）。改此守卫时必须与 mihomo 配置拷贝（mihomo/config.yaml）同查同改。
+- **坑 15（v1.4.9 真机，二进制升级半更新）**：splitd 是常驻服务，升级 `customize.sh` 运行时旧
+  splitd 仍在跑，`cp` 覆盖会因 `ETXTBSY`（Text file busy）静默失败——但 `split.bpf.o`/`splitctl`
+  未占用可覆盖成功 → 设备出现"BPF 新 + splitd 旧"版本错配（map_cfg 结构 7→8 字节，
+  `map 'map_cfg': unexpected value size 7 provided, expected 8`，loader 写 map 失败 → 内核回落
+  `default_verdict=tun` 全流量灌进 mihomo → 高 CPU/高内存/连接风暴）。customize.sh 二进制段现为：
+  ① 先 `touch run/splitd.disabled` + `pkill` 旧 splitd/splitctl/watchdog（防 5 分钟循环拉起）；
+  ② `cp -f` 后 `cmp -s` 校验，失败即 `abort`。**硬契约：改 customize.sh 二进制部署时，停进程 + 覆盖校验缺一不可。**
 - 坑 4（v1.0.2 实测）：**`export SPLIT_SOCKET="$INSTALL_DIR/run/splitd.sock"`** 必须在起 splitd 前设置
   （Android 无 /run，不设则 ctl socket 绑不上）。service.sh / start-split.sh / stop-split.sh 都已加。
 - 坑 5（v1.0.2 实测）：**BPF 必须 `-mcpu=v1`**，否则真机 5.x GKI verifier 报 `BPF_STX uses reserved fields` 拒载（见 docs/03 §8.5）。
@@ -37,7 +44,7 @@
 - `start-split.sh`：手动 debug 启动（`splitd -d`，输出到终端）。
 - `stop-split.sh`：`splitctl stop`（经 socket）。
 - **`split-watchdog.sh`（v1.1.7 新增）**：splitd 存活守护，见下方专节。
-- `check-kernel.sh`：启动前能力探测（bpf syscall/verifier/版本），结果影响降级分支。
+- `check-kernel.sh`：人工能力探测（bpf syscall/verifier/版本）；service 不调用它，BPF 失败的精确原因以 splitd.log/dmesg/SELinux 为准。
 
 ## split-watchdog.sh（v1.1.7，熄屏后代理失效修复核心）
 - **背景（真机症状）**：长时间熄屏后无法代理，mihomo 只剩自身 DNS 连接。根因=splitd 只由
@@ -46,7 +53,7 @@
   另：kernel 侧 v1.1.7 已加接口挂载 5s 自愈心跳（daemon/MEMORY「网络切换」），watchdog 补的是
   **进程死亡**这条路径。
 - **机制**：周期（默认 15s）探活 `splitctl status`（连 ctl socket；比 pidfile 可靠，覆盖
-  service.sh / splitctl start / WebUI start 各路派生实例），失败且 utun 存在+SELinux 放行则
+  service.sh / splitctl start / WebUI start 各路派生实例），失败且配置中的 `tun_device` 存在+SELinux 放行则
   按同参数（`-c config -b bpf.o`）重新拉起 splitd，日志写 `logs/splitd.log`（`[wd]` 前缀）。
 - **停止闸（防"刚 stop 又被拉起"）**：显式停止路径必须先 `touch run/splitd.disabled` 再杀
   watchdog——已接入 `stop-split.sh` 与 WebUI `stop`；启动路径（service.sh / WebUI `start`）
@@ -57,9 +64,9 @@
   路径（含直连 `splitctl stop`）都生效**，不再遗漏。脚本里的显式 `touch`/`rm -f` 保留
   （watchdog 探活性的 shell 上下文仍需，且与 splitctl 幂等）。改闸逻辑唯一定点 = daemon
   目录下 cli/splitctl.c 的 `gate_set/gate_clear` + 本处 shell 声明，改一处必查另一处。
-- **防 crash-loop**：utun 不存在（mihomo 未起）直接跳过（splitd 没 tun 拉起也是 exit 3）；
+- **防 crash-loop**：目标 TUN 不存在（mihomo 未起）直接跳过（splitd 没 tun 拉起也是 exit 3）；
   连续失败指数退避（15s→...→最长 5 分钟），防 BPF 加载失败等死循环刷日志。
-  **v1.1.7**：utun 缺失 / splitd 二进制缺失这两个"本次不拉起"分支会 `fails=0`——它们不
+  **v1.1.7**：TUN 缺失 / splitd 二进制缺失这两个"本次不拉起"分支会 `fails=0`——它们不
   是失败计数，不清会拿陈旧退避拖慢 mihomo 恢复后的首次拉起。
 - **mihomo TUN 自愈（v1.2.9，真机问题修复）**：原 watchdog 只在 **splitd 死亡**路径做动作，
   "splitd 活着但 mihomo TUN 中途消失（map_tun=0）"是静默降级——代理流量被放行直连
@@ -93,28 +100,15 @@
 - 与 boot 自启关系：service.sh 在 splitd 起来后拉起；WebUI `start` 也会拉。手动前台
   `start-split.sh`（-d 调试）不拉 watchdog，适合一轮排障。
 - `setup-box-tun.sh`：**一键端到端接入 box mihomo（TUN 模式）**——复制 box 配置、改 tun 段（auto-route:false）、复用 CNIP、起 mihomo+splitd。真机验证可复现（CN 直连 39ms / 海外代理 219ms）。
-- `fix-mihomo-tun.sh`（v1.1.3 新增，v1.2.6 加 `device`，**v1.4.8 补 `enable:true`**）：
+- `fix-mihomo-tun.sh`（v1.1.3 新增，v1.2.6 加 `device`，v1.4.8 补 `enable:true`）：
   **幂等修复 mihomo tun 段，对齐 eBPF-Split 契约**——
-  enable:true / device:utun / auto-route:false / strict-route:false / stack:gvisor / gso:false / mtu:1500 /
-  auto-detect-interface:false，全部整行重写 sed；tun 段缺某项用 `a` 追加（**Android toybox sed
-  不支持 `0,/re/` 地址**，实测报 "no previous regex"，严禁使用）。service.sh 启动 mihomo 前 +
-  WebUI start 前都会调用；setup-box-tun.sh step2 也委托它（**tun 段 sed 只允许这一处维护**，改契约两处文档同步）。
-  **v1.4.8 补 `enable:true` 的动机**：此前契约清单含 enable 但脚本只修其余 6 项（只有
-  setup-box-tun.sh 内联 sed 在强制），box 原样配置/恢复备份若 `tun.enable:false` 或 tun 段无
-  enable 行 → mihomo 起不来 utun → service.sh 30s 等不到 utun 整机静默不激活；watchdog
-  `restart_mihomo` 在 API 又不可达时 5 分钟无限重启循环。现统一收敛。**实现要点：`enable`
-  是共享键名（dns 等节也有 `  enable:`），不能走 fix_key 的全文件 `^  enable:` 匹配
-  （dns 在前会把 dns.enable 改掉而 tun 段照旧不补），用 awk 限定 tun: 块内处理
-  （tun: 行后到下一个顶格 key 之前；注释/空行不结束块）。setup-box-tun.sh 相应删掉残留的
-  内联 enable/device sed（v1.4.8 前注释称"已移除"实则残留）。
-  **v1.2.6 补 `device:utun`**：mihomo WebUI 重载可能把 tun.device 改空/改名 → 新 TUN 落回
-  mihomo Linux 默认名 "Meta" 漂移（split 侧已有名字+类型漂移兜底，**v1.2.8 起排除系统 VPN
-  的 tunN**，这里启动前强制回 utun 双保险，与 split.yaml tun_device 保持字节一致）。
-  - **坑（v1.1.3 真机教训，本脚本存在的意义）**：box 原样配置常带 `auto-route:true` +
-    `strict-route:true`——mihomo 会接管路由（ip rule 9002 → table 2022 `default dev utun`），
-    物理网卡 egress 的 eBPF 完全看不到流量 → **CNIP/规则分流静默失效**（`direct_cn` 恒 0、
-    proxy 计数停滞，却无任何报错）。症状：splitctl stats 无增长 + `ip rule` 有 9002/2022。
-  - **验证**：`splitctl status` 的 `hijack=0`（daemon 每 10s 自检路由接管）+ `cnip4/6` 非 0。
+  enable:true / `device:<split.yaml.tun_device>` / auto-route:false / strict-route:false /
+  stack:gvisor / gso:false / mtu:1500 / auto-detect-interface:false。全部字段以一次 awk
+  仅限定 `tun:` 块（到下一个顶格 key 前）的方式规范化、去重并补缺项，绝不全文件匹配共享键名；
+  临时文件在同目录、成功后原子 mv。返回 `0`=合规/修复成功、`1`=无文件或无 tun 段可跳过、`2`=发现
+  tun 段但写回失败。service/WebUI/watchdog/setup-box 必须传解析出的 TUN 名并区分 rc=1 与 rc=2。
+  - **坑**：box 原样配置常带 `auto-route:true` + `strict-route:true`——mihomo 会接管路由，
+    物理网卡 egress 的 eBPF 完全看不到流量 → **CNIP/规则分流静默失效**。
 
 ## 目录规范（v1.0.3 重新整理，运行时分层）
 `/data/adb/split/` 运行时分层，避免根级散落：
@@ -148,16 +142,11 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 ## box 集成经验（v1.0.2 真机实测，小米 diting + KernelSU）
 - 设备上若有 box 代理模块（`/data/adb/box`），其 mihomo 二进制（`/data/adb/box/bin/mihomo`）可复用。
 - **不要改 box 原配置**：复制其 mihomo 目录到 `/data/adb/split/mihomo/`（含 proxies/ rules/ cache.db），再改 tun 段。
-- **关键改动（tun 段，v1.1.3 起由 fix-mihomo-tun.sh 幂等执行，唯一真源）**：`enable:true, device:utun,
+- **关键改动（tun 段，v1.1.3 起由 fix-mihomo-tun.sh 幂等执行，唯一真源）**：`enable:true, device:<split.yaml.tun_device>,
   auto-route:false, strict-route:false, stack:gvisor, gso:false, mtu:1500, auto-detect-interface:false`。
   `auto-route:false` 是必须的——让 mihomo 只建 tun 设备不接管路由，路由和分流全交给 eBPF。
 - 启动：`mihomo -t -d <dir>` 先测配置，再 `nohup mihomo -d <dir> &`（root 跑，uid=0 已在 skip_uid 防回环）。
-- **坑（v1.0.3 实机踩坑）**：改 tun 段必须用"**整行重写**" sed（`s/^  stack:.*$/  stack: gvisor/`），
-  **不要**用局部替换（`s/^\(  stack:\) [a-zA-Z]*/\1 gvisor/`）。局部替换多次执行会把
-  `stack: gvisor #system/minxd` 切成 `stack: gvisor#system/minxd`（丢空格）或
-  `system#system/minxd` → mihomo `invalid tun stack` fatal → utun 不建 → splitd 降级。
-  **症状**：mihomo.log `Parse config error: invalid tun stack`；splitd.log `30s 内未发现 utun`。
-  **恢复**：`sed -i 's/^  stack:.*$/  stack: gvisor #system\/minxd/' config.yaml` 后重启。
+- **坑（v1.0.3 实机踩坑）**：改 tun 段现在由 fixer 在 `tun:` 块内整行规范化并原子写回；不要再用全文件 sed 或局部替换。
 - **CNIP 数据**：box 的 `/data/adb/box/run/cn.zone`（v4）和 `cn_ipv6.zone`（v6）就是"每行 CIDR"格式，可直接复制给 splitd 用（命名 cn_cidr_v4.txt / cn_cidr_v6.txt）；行数随 box 数据源而定（本仓库默认源 Loyalsoldier 全量 v4=4145 / v6=1235）。
 - **split.yaml 的 cnip 路径建议用绝对路径**（`/data/adb/split/config/cn_cidr_v4.txt`），避免 splitd 工作目录歧义。
 - 端到端验证结论：CN 直连（direct_cn 增长、不经过 mihomo）、海外 redirect 进 utun（proxy 增长、utun rx 增长）、skip_uid 防回环、无 dropped/redirect_err。
@@ -175,7 +164,9 @@ mihomo/   mihomo 配置目录（box 复制或随包）
 - WebUI“开关”页的 `启用 CNIP 分流`/`绕过 CNIP 分流` 通过 `webuiapi.sh cnip on|off` 调用 splitctl；后端只允许 `on|off|status`，不透传任意参数。
 - 状态页解析 daemon status 的 `cnip=on|off`；关闭仅绕过策略查询，map 仍刷新，重启 splitd 后恢复开启。配置编辑器不保存该临时状态。
 
-## KernelSU WebUI（webroot/ + webuiapi.sh）
+- **TUN 真源收敛（本批）：** `/data/adb/split/config/split.yaml` 顶层 `tun_device` 由 `scripts/split-tun-contract.sh` 读取，service/WebUI/watchdog/setup-box/清理脚本及 mihomo fixer 均使用该值；缺省才回退 `utun`。不要在 Android 脚本新增独立的 `utun` 硬编码。fixer 的 `device` 参数必须与此值一致。
+- **WebUI start 时序（本批）：** 按 mihomo → 等目标 TUN → splitd → status(tun>0) → watchdog 顺序执行；前置失败返回非零且不清停止闸、不启动 watchdog。splitd `exit(3)` 仍表示启动时 TUN 缺失，不改 daemon 语义。
+- **降级语义（本批澄清）：** BPF 加载失败为 splitd `exit(2)`；因 mihomo tun 契约保持 `auto-route:false`，当前不自动切换为可用 pure-TUN 代理，必须查日志/内核能力。不要再把该路径描述为“自动纯 TUN 保底”。
 - **前端**：`magisk/webroot/`（`index.html` + `app.js` + `style.css` + `kernelsu.js`）。
   KernelSU 识别模块含 `webroot/index.html` 即启用 WebUI（KernelSU Manager 的 WebView 提供）。
 - **自动刷新（v1.1.5）**：`startPolling` 每 5s 在**状态面板激活时**刷新 status/stats/mihomo，面板未激活不轮询（省电/省 WebView）；`init()` 首屏手动全量拉一次。

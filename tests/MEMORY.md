@@ -8,6 +8,10 @@
   加引号会被 bash 当单个命令名，报 `No such file or directory`；必须**不加引号**（SCTL 值固定无注入面）。
 - 单元测试目录 `tests/unit/` 目前为空，脚本只输出提示。
 
+## Android shell fixture
+- `tests/android/test-lifecycle.sh`：纯 shell fixture，不依赖 root/BPF，验证 `split-tun-contract.sh` 对默认值/CRLF/行内注释/非法接口名的处理，以及 `fix-mihomo-tun.sh` 只改 `tun:` 直接子项、不误改 dns/rules 同名键、补全契约并保持幂等。
+- 运行：`sh tests/android/test-lifecycle.sh`。脚本使用临时目录，退出时清理；适合 Windows 的 Git Bash/WSL/Linux 静态脚本回归，不能替代 Android 真机生命周期测试。
+
 ## 运行方式
 ```bash
 sudo ./tests/integration.sh        # 需 root + mihomo 已起 + 已 load（splitd）

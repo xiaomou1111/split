@@ -150,7 +150,7 @@
     <div class="card">
       <h2>守护进程开关</h2>
       <div class="btn-row">
-        <button class="btn primary" id="act-start" data-cmd="start">启动 splitd</button>
+        <button class="btn primary" id="act-start" data-cmd="start">启动分流（mihomo→splitd）</button>
         <button class="btn" id="act-stop" data-cmd="stop">停止 splitd</button>
         <button class="btn" id="act-reload" data-cmd="reload">reload</button>
         <button class="btn" id="act-reload-cnip" data-cmd="reload-cnip">reload-cnip</button>
@@ -159,9 +159,9 @@
         <button class="btn" id="act-cnip-off" data-cmd="cnip off">绕过 CNIP 分流</button>
       </div>
       <p class="hint">
-        停止命令走 daemon socket 的 <code>stop</code>；启动会派生 <code>splitd</code>。
-        切换 <code>verdict / ipv6 / skip_uid</code> 等在"参数"页改配置后保存即可。
-        <code>reload-cnip</code> 只重读本地 CNIP 文件；<code>更新 CNIP</code> 会从
+        停止命令走 daemon socket 的 <code>stop</code>；启动分流会先确保 mihomo 与配置中的
+        <code>tun_device</code> 已就绪，再派生 <code>splitd</code> 并等待 status。没有随包 mihomo 时，
+        请先由外部代理创建该 TUN。        <code>reload-cnip</code> 只重读本地 CNIP 文件；<code>更新 CNIP</code> 会从
         <code>cnip.url_v4/url_v6</code> 重新下载后重灌（需配置了 url，下载在后台，
         进度见 splitd.log，完成后上方 CNIP 计数自动更新）。CNIP 分流按钮仅临时改变
         当前进程的策略，重启 splitd 后恢复开启；关闭时 CNIP 数据仍会继续刷新。

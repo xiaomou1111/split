@@ -111,9 +111,9 @@ boot → post-fs-data(挂 bpffs) → late_start service.sh
  └─ 1) 能力探测：splitd 二进制是否在位  缺失 → 跳过 eBPF（check-kernel.sh 是独立手检工具，service.sh 不调用）
     2) magiskpolicy 打开 bpf/tc（见 §2）
     3) sysfs 挂载 /sys/fs/bpf 或 magisk_bpf
-    4) 启动 mihomo(自带或已有app) → 确保 tun0 已起
-    5) splitd -c $CFG -d      # daemon 加载 bpf、attach、灌 CNIP
-    6) 检查 `splitctl status` → OK
+    4) 启动 mihomo(自带或已有app) → 确保 split.yaml 顶层 tun_device 对应的 TUN 已起
+    5) splitd -c $CFG -b $BPF_OBJ      # daemon 加载 bpf、attach、灌 CNIP
+    6) 检查 `splitctl status` → OK 且 tun>0
     7) (v1.1.7) 拉起 `scripts/split-watchdog.sh` 守护 splitd（doze/LMK 杀掉后自动重启）
     8) (v1.2.9) watchdog 另守 mihomo TUN：探活到 map_tun=0（mihomo TUN 消失）时经 mihomo
        API 无感恢复，API 失败则重启 mihomo——"splitd 活着但代理静默放行"也能自愈
@@ -130,8 +130,8 @@ sepolicy.rule` 骨架；`scripts/gen-magisk.sh` 打包 zip。
 
 | 环节 | 降级动作 | 用户感知 |
 |---|---|---|
-| BPF 加载失败 | 跳过 eBPF、仅起 mihomo（auto-route 保持 false，不自动接管路由） | 仍可上网，但流量不进 mihomo TUN（需 TUN 代理请自行给 mihomo 配 auto-route） |
-| mihomo 未开 tun | splitd 启动失败并报错给你 | 无网（故意的，提示先起 mihomo） |
+| BPF 加载失败 | splitd 退出（exit 2），保持 mihomo `auto-route:false`，不会自动切换成可用的纯 TUN 代理 | eBPF 分流不可用；查 `splitd.log`、`dmesg`、SELinux 和内核能力，不要把该状态当作代理已接管 |
+| mihomo 未开 tun | splitd 启动失败（exit 3）并报错给你 | WebUI/service 应先等待配置中的 `tun_device`；无 TUN 时不应派生 splitd |
 | 单一接口 attach 失败 | 跳过该接口，写日志 | 个别网卡不走分流 |
 
 ## 8. 性能与功耗建议
@@ -214,11 +214,11 @@ sh /data/adb/split/scripts/setup-box-tun.sh   # 或仓库里 android/scripts/set
 
 脚本做的事：
 1. **不改 box 原件**：`cp -a /data/adb/box/mihomo /data/adb/split/mihomo`
-2. **改 tun 段**（`fix-mihomo-tun.sh` 幂等执行，单一真源）：
-   `enable:true, device:utun, auto-route:false, strict-route:false, stack:gvisor, gso:false, mtu:1500, auto-detect-interface:false`
+2. **改 tun 段**（`fix-mihomo-tun.sh` 幂等执行，设备名取 split.yaml 顶层 `tun_device`）：
+   `enable:true, device:<tun_device>, auto-route:false, strict-route:false, stack:gvisor, gso:false, mtu:1500, auto-detect-interface:false`
    - `auto-route:false` 是**必须**的：让 mihomo 只建 tun 设备、不接管路由，路由与分流全交给 eBPF。
 3. **复用 CNIP**：`cp /data/adb/box/run/cn.zone → cn_cidr_v4.txt`（格式兼容，每行 CIDR）
-4. 起 mihomo → 等 utun → 起 splitd → 验证
+4. 起 mihomo → 等 `tun_device` → 起 splitd → 验证
 
 实测结果（小米 diting）：
 ```

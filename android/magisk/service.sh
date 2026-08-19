@@ -2,10 +2,10 @@
 # service.sh — late_start：核心启动胶水
 #
 # 顺序：
-#   1) 能力探测（无 bpf → 跳过 eBPF，mihomo 仍要起，纯 TUN 由它负责）
+#   1) 资产探测（splitd 缺失 → 跳过 eBPF，mihomo 仍可尝试启动，但不会自动接管纯 TUN 路由）
 #   2) SELinux 放行（magiskpolicy --live）
 #   3) 起 mihomo（若随包）——独立于 splitd，缺一个不影响另一个
-#   4) 等 utun 出现 → 起 splitd
+#   4) 等 split.yaml 的 tun_device 出现 → 起 splitd；超时仍拉 watchdog 等待后续 TUN
 #   5) 自检
 #
 # 运行时分层（/data/adb/split/）：
@@ -18,11 +18,26 @@ CONFIG="$INSTALL_DIR/config/split.yaml"
 LOG_DIR="$INSTALL_DIR/logs"
 RUN_DIR="$INSTALL_DIR/run"
 LOG="$LOG_DIR/splitd.log"
+TUN_CONTRACT="$INSTALL_DIR/scripts/split-tun-contract.sh"
+TUN_DEVICE=utun
 
 mkdir -p "$BIN_DIR" "$INSTALL_DIR/config" "$LOG_DIR" "$RUN_DIR" 2>/dev/null
 : > "$LOG"
 
 log() { echo "[split] $(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
+
+if [ -x "$TUN_CONTRACT" ]; then
+  if ! TUN_DEVICE=$("$TUN_CONTRACT" "$CONFIG" 2>>"$LOG"); then
+    log "无法解析 split.yaml 的 tun_device，停止启动（默认值仅在 resolver 缺失时使用）"
+    TUN_DEVICE=""
+  fi
+fi
+
+start_watchdog() {
+  [ -x "$INSTALL_DIR/scripts/split-watchdog.sh" ] || return 0
+  "$INSTALL_DIR/scripts/split-watchdog.sh" >> "$LOG" 2>&1 &
+  log "split-watchdog 已拉起（目标 TUN=$TUN_DEVICE，每 15s 探活 splitd）"
+}
 
 # ---------- 1) 内核能力 ----------
 has_splitd=0
@@ -41,23 +56,35 @@ if [ -x "$BIN_DIR/splitd" ]; then
     log "sepolicy 已放行"
   fi
 else
-  log "splitd 缺失，跳过 eBPF（mihomo 纯 TUN 仍会尝试启动）"
+  log "splitd 缺失，跳过 eBPF（mihomo 仍会尝试启动；auto-route:false 下不会自动接管代理流量）"
 fi
 
 # ---------- 3) mihomo（若随包在 bin/mihomo）----------
-# 注意：mihomo 启动不依赖 splitd 是否存在。若缺 splitd，mihomo 自带的
-# auto-route 也能保底 TUN，避免"注释说纯 TUN 负责但实际没起"的死区。
+# 注意：mihomo 启动不依赖 splitd 是否存在；但本模块的 auto-route:false 契约
+# 不会在 splitd 缺失时自动提供可用的 pure-TUN 代理。
 start_mihomo() {
+  if [ -z "$TUN_DEVICE" ]; then
+    log "tun_device 无效，跳过 mihomo 启动"
+    return 1
+  fi
   if [ ! -x "$BIN_DIR/mihomo" ]; then
-    log "未随包 mihomo，请用官方 app（tun.device=utun）或用 setup-box-tun.sh 接入 box"
+    log "未随包 mihomo，请用官方 app（tun.device=$TUN_DEVICE）或用 setup-box-tun.sh 接入 box"
     return 1
   fi
   # v1.1.3：启动前强制对齐 tun 段契约（auto-route:false 等），防止 box 原样
   # 配置/用户手改导致 mihomo 接管路由 → eBPF 分流失效（direct_cn 恒 0）
   # 注意：fix 脚本 exit 1 = 配置缺失/无 tun 段（跳过，不视为失败）
   if [ -x "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" ]; then
-    "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" >> "$LOG" 2>&1 || true
-    log "tun 段契约检查完成（见上）"
+    if "$INSTALL_DIR/scripts/fix-mihomo-tun.sh" "$INSTALL_DIR/mihomo/config.yaml" "$TUN_DEVICE" >> "$LOG" 2>&1; then
+      :
+    else
+      rc=$?
+      if [ "$rc" -ne 1 ]; then
+        log "tun 段契约修复失败（rc=$rc），不启动 mihomo"
+        return "$rc"
+      fi
+    fi
+    log "tun 段契约检查完成（目标 TUN=$TUN_DEVICE，见上）"
   fi
   if pgrep -f "$BIN_DIR/mihomo" >/dev/null 2>&1; then
     log "mihomo 已在运行"
@@ -77,39 +104,37 @@ for try in 1 2 3; do
   log "mihomo 尝试 $try 次后未存活（详见 mihomo.log），重试"
 done
 
-# ---------- 4) 等 tun + 起 splitd ----------
+# ---------- 4) 等目标 tun + 起 splitd ----------
 if [ "$has_splitd" -eq 1 ]; then
-  i=0
-  while [ $i -lt 30 ]; do
-    if [ -d "/sys/class/net/utun" ] || ip link show utun >/dev/null 2>&1; then
-      break
-    fi
-    i=$((i+1)); sleep 1
-  done
-
-  if [ $i -ge 30 ]; then
-    log "30s 内未发现 utun，降级纯 TUN（看 mihomo.log 是否 tun 建失败）"
+  if [ -z "$TUN_DEVICE" ]; then
+    log "tun_device 无效，跳过 splitd 与 watchdog"
+  elif [ ! -x "$BIN_DIR/splitctl" ] || [ ! -f "$BIN_DIR/split.bpf.o" ]; then
+    log "splitd 运行资产不完整（需要 splitd、splitctl、split.bpf.o），跳过启动"
   else
-    # Android 无 /run 目录，ctl socket 走 run/
+    i=0
+    while [ $i -lt 30 ]; do
+      if [ -d "/sys/class/net/$TUN_DEVICE" ] || ip link show "$TUN_DEVICE" >/dev/null 2>&1; then
+        break
+      fi
+      i=$((i+1)); sleep 1
+    done
+
+    # 即使首次等待超时也启动 watchdog；它会在目标 TUN 后续出现时补拉 splitd。
     export SPLIT_SOCKET="$RUN_DIR/splitd.sock"
-    if [ ! -f "$BIN_DIR/split.bpf.o" ]; then
-      log "缺少 $BIN_DIR/split.bpf.o，无法启动 splitd（请重新安装模块）"
+    rm -f "$INSTALL_DIR/run/splitd.disabled"
+    if [ $i -ge 30 ]; then
+      log "30s 内未发现 TUN $TUN_DEVICE，暂不启动 splitd；watchdog 将继续等待（见 mihomo.log）"
+      start_watchdog
     else
       "$BIN_DIR/splitd" -c "$CONFIG" -b "$BIN_DIR/split.bpf.o" >> "$LOG" 2>&1 &
       sleep 2
       if "$BIN_DIR/splitctl" status >> "$LOG" 2>&1; then
-        log "splitd 已启动"
+        log "splitd 已启动（TUN=$TUN_DEVICE）"
       else
         log "splitd 启动失败或已退出（BPF 加载失败时 splitd 会直接退出；"
-        log "  mihomo 若 auto-route:false 则无分流兜底，请查 splitd.log/dmesg/sepolicy）"
+        log "  mihomo 若 auto-route:false 则不会自动切换为纯 TUN 代理，请查 splitd.log/dmesg/sepolicy）"
       fi
-      # v1.1.7：清理历史 stop 残留的停止闸（全新 boot 本不应存在，防升级/缓存脏状态），
-      # 并拉起存活守护——doze/LMK 杀 splitd 后自动按同参数重启（探活走 ctl socket）。
-      rm -f "$INSTALL_DIR/run/splitd.disabled"
-      if [ -x "$INSTALL_DIR/scripts/split-watchdog.sh" ]; then
-        "$INSTALL_DIR/scripts/split-watchdog.sh" >> "$LOG" 2>&1 &
-        log "split-watchdog 已拉起（每 15s 探活 splitd）"
-      fi
+      start_watchdog
     fi
   fi
 fi

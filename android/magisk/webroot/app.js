@@ -217,6 +217,7 @@ async function loadLog() {
 
 // 自动刷新轮询句柄
 let statTimer = 0, logTimer = 0;
+let lifecycleBusy = false;
 function startPolling() {
   if (statTimer) return;
   // 状态/统计/mihomo/env 每 5 秒刷新；仅在状态面板激活时轮询
@@ -465,14 +466,28 @@ function bindActions() {
   $('cfg-save').addEventListener('click', saveConfig);
   $('cfg-validate').addEventListener('click', validateConfig);
 
-  // 守护进程动作：执行后回显输出并刷新状态面板（让结果立即可见）
+  // 守护进程动作：执行期间锁住生命周期按钮，避免 start/stop 与 mihomo 操作竞态。
+  const lifecycleButtons = [
+    $('act-start'), $('act-stop'), $('act-mihomo-start'), $('act-mihomo-stop'),
+  ];
   const btnHit = b => b.addEventListener('click', async () => {
-    const r = await callApi(b.dataset.cmd);
-    $('act-result').textContent = r.text;
-    console.log('[daemon]', b.dataset.cmd, r.text);
-    await refreshStatusPanel();
-    if (!r.err && b.dataset.msg) showToast(b.dataset.msg);
-    if (b.dataset.cmd === 'reload' || b.dataset.cmd === 'reload-cnip') loadCfgSummary();
+    if (lifecycleBusy) {
+      showToast('已有启动/停止操作进行中，请稍候');
+      return;
+    }
+    lifecycleBusy = true;
+    lifecycleButtons.forEach(x => { if (x) x.disabled = true; });
+    try {
+      const r = await callApi(b.dataset.cmd);
+      $('act-result').textContent = r.text;
+      console.log('[daemon]', b.dataset.cmd, r.text);
+      await refreshStatusPanel();
+      if (!r.err && b.dataset.msg) showToast(b.dataset.msg);
+      if (b.dataset.cmd === 'reload' || b.dataset.cmd === 'reload-cnip') loadCfgSummary();
+    } finally {
+      lifecycleBusy = false;
+      lifecycleButtons.forEach(x => { if (x) x.disabled = false; });
+    }
   });
   btnHit($('act-start'));
   btnHit($('act-stop'));
@@ -483,11 +498,22 @@ function bindActions() {
   btnHit($('act-cnip-off'));
 
   const btnMihomo = (b, okMsg) => b.addEventListener('click', async () => {
-    const r = await callApi(b.dataset.cmd);
-    $('act-result').textContent = r.text;
-    showToast(r.err ? r.text : okMsg);
-    loadMihomo();
-    loadEnv();
+    if (lifecycleBusy) {
+      showToast('已有启动/停止操作进行中，请稍候');
+      return;
+    }
+    lifecycleBusy = true;
+    lifecycleButtons.forEach(x => { if (x) x.disabled = true; });
+    try {
+      const r = await callApi(b.dataset.cmd);
+      $('act-result').textContent = r.text;
+      showToast(r.err ? r.text : okMsg);
+      await loadMihomo();
+      await loadEnv();
+    } finally {
+      lifecycleBusy = false;
+      lifecycleButtons.forEach(x => { if (x) x.disabled = false; });
+    }
   });
   btnMihomo($('act-mihomo-start'), 'mihomo 启动完成');
   btnMihomo($('act-mihomo-stop'), 'mihomo 已停止');

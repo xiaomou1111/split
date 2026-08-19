@@ -181,7 +181,8 @@ L4 平台胶水     android/magisk
   （late_start）→ root 下依次：
   1. 能力探测：`splitd` 二进制是否在位（缺失则跳过 eBPF，仅尝试起 mihomo）
   2. 调用 `magiskpolicy --live` 打开 bpf/tc 权限（sepolicy）
-  3. 起 mihomo（或要求已装）→ 等 utun → 起 splitd -c config → 拉起 split-watchdog.sh 守护（v1.1.7）
+  3. 起 mihomo（或要求已装）→ 等 `split.yaml` 的 `tun_device` → 起 splitd -c config → 拉起 split-watchdog.sh 守护（v1.1.7）
+- `android/scripts/split-tun-contract.sh`：读取 split.yaml 顶层 `tun_device`（缺省 `utun`、接口名校验），供 service/WebUI/watchdog/box/fixer 共同使用，避免 Android 启动门与 daemon 配置漂移。
 - `android/scripts/check-kernel.sh`：探测 `/sys/fs/bpf` 挂载、`/proc/config.gz` 内核配置、`/dev/net/tun`
   （能力清单 + 支持度矩阵，不发起 `bpf()` 系统调用）。
 - `android/scripts/split-watchdog.sh`（v1.1.7 / v1.2.9 增 mihomo TUN 自愈）：splitd 存活守护——15s 探活 `splitctl status`，

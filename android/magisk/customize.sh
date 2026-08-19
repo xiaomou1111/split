@@ -28,16 +28,38 @@ mkdir -p "$INSTALL_DIR" 2>/dev/null || {
 }
 
 # 二进制（构建期由 gen-magisk.sh 填进去）
+# 升级覆盖坑（v1.4.9 真机）：splitd 是常驻服务，升级时旧进程仍在跑，`cp` 覆盖
+# 会因 ETXTBSY（Text file busy）静默失败，导致二进制与 BPF 版本错配
+# （map_cfg 结构 7→8 字节，map 写入失败→全流量灌进 mihomo）。故：
+#   ① 先停掉旧 splitd/splitctl（含 watchdog 避免 5 分钟循环拉起）；
+#   ② cp 覆盖后 cmp 校验，失败即 abort，杜绝"半更新"静默残留旧版。
 mkdir -p "$INSTALL_DIR/bin"
-if [ -f "$MODPATH/bin/splitd" ]; then
-  cp "$MODPATH/bin/splitd" "$INSTALL_DIR/bin/splitd"
-  chmod 0755 "$INSTALL_DIR/bin/splitd"
-  cp "$MODPATH/bin/splitctl" "$INSTALL_DIR/bin/splitctl"
-  chmod 0755 "$INSTALL_DIR/bin/splitctl"
-fi
-if [ -f "$MODPATH/bin/split.bpf.o" ]; then
-  cp "$MODPATH/bin/split.bpf.o" "$INSTALL_DIR/bin/split.bpf.o"
-fi
+
+# 停旧进程：kill 常驻 splitd + splitctl（若在跑），并先置停止闸防 watchdog 拉起。
+# 闸会在服务下次正常启动时被清除（start 路径清闸），此处不删，重启后由 service.sh 接管。
+touch "$INSTALL_DIR/run/splitd.disabled" 2>/dev/null || true
+pkill -f "$INSTALL_DIR/bin/splitd" 2>/dev/null || true
+pkill -f "$INSTALL_DIR/bin/splitctl" 2>/dev/null || true
+pkill -f "split-watchdog.sh" 2>/dev/null || true
+sleep 2   # 给进程退出 + watchdog 退避留出时间，确保 ETXTBSY 消失
+
+copy_bin() {   # $1=源, $2=目标, $3=chmod 位（可执行传 0755，纯数据传空）
+  if [ -f "$1" ]; then
+    if ! cp -f "$1" "$2" 2>/dev/null; then
+      ui_print "覆盖 $2 失败（进程仍在运行？），升级中止"
+      abort
+    fi
+    if ! cmp -s "$1" "$2"; then
+      ui_print "校验失败: $2 与模块内容不一致，升级中止"
+      abort
+    fi
+    [ -n "$3" ] && chmod "$3" "$2"
+  fi
+}
+
+copy_bin "$MODPATH/bin/splitd"      "$INSTALL_DIR/bin/splitd"      0755
+copy_bin "$MODPATH/bin/splitctl"    "$INSTALL_DIR/bin/splitctl"    0755
+copy_bin "$MODPATH/bin/split.bpf.o" "$INSTALL_DIR/bin/split.bpf.o" ""
 
 # 配置（含默认值 + 用户可改）
 mkdir -p "$INSTALL_DIR/config"
